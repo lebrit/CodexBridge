@@ -1,0 +1,30 @@
+# CODEX-KNOWLEDGE-STACK-BEGIN
+graphify-out/
+.git/
+.codebase-memory/
+.codex-cache/
+node_modules/
+vendor/
+dist/
+build/
+coverage/
+.cache/
+cache/
+logs/
+log/
+*.log
+tmp/
+temp/
+*.zip
+*.7z
+*.tar
+*.gz
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+secrets/
+credentials/
+# CODEX-KNOWLEDGE-STACK-END

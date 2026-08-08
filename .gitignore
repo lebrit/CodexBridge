@@ -1,0 +1,31 @@
+# Build output
+bin/
+obj/
+artifacts/
+TestResults/
+
+# IDE and user state
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Local application state and secrets
+*.log
+*.tmp
+*.bak
+*.key
+*.pem
+.env
+.env.*
+auth.json
+state_5.sqlite*
+
+# Local knowledge indexes and generated graphs
+graphify-out/
+.codebase-memory/
+.codex-cache/
+
+# Backup repositories must never be committed
+restic-v1/
+backups/
