@@ -25,9 +25,10 @@ public sealed class ProjectEntry
 
 public sealed class AppSettings
 {
-    public int SchemaVersion { get; set; } = 1;
+    public int SchemaVersion { get; set; } = 2;
     public bool SetupCompleted { get; set; }
     public string Theme { get; set; } = "Dark";
+    public bool IncludeVsCode { get; set; } = true;
     public List<string> ProjectRoots { get; set; } = [];
     public string LocalRepository { get; set; } = "";
     public string CloudRepository { get; set; } = "";
@@ -35,6 +36,10 @@ public sealed class AppSettings
     public string ResticExecutable { get; set; } = "restic";
     public string DestinationRoot { get; set; } = "";
     public int ScanDepth { get; set; } = 6;
+    public bool RetentionEnabled { get; set; }
+    public int KeepDaily { get; set; } = 7;
+    public int KeepWeekly { get; set; } = 4;
+    public int KeepMonthly { get; set; } = 6;
     public string ScheduledTaskName { get; set; } = "CodexBridge Hourly Backup";
 }
 

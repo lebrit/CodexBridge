@@ -16,9 +16,11 @@ $next = switch ($Part) {
 }
 
 $props.Project.PropertyGroup.VersionPrefix = $next.ToString(3)
-$settings = [XmlWriterSettings]::new()
+$settings = [System.Xml.XmlWriterSettings]::new()
 $settings.Indent = $true
-$settings.Encoding = [Text.UTF8Encoding]::new($false)
-$writer = [XmlWriter]::Create($propsPath, $settings)
+$settings.OmitXmlDeclaration = $true
+$settings.Encoding = [System.Text.UTF8Encoding]::new($false)
+$writer = [System.Xml.XmlWriter]::Create($propsPath, $settings)
 try { $props.Save($writer) } finally { $writer.Dispose() }
+[System.IO.File]::AppendAllText($propsPath, [Environment]::NewLine, $settings.Encoding)
 Write-Host "Version: $($current.ToString(3)) -> $($next.ToString(3))"

@@ -16,6 +16,12 @@ if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
     throw "Invalid semantic version: $Version"
 }
 
+$dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
+$dotnet = if ($dotnetCommand) { $dotnetCommand.Source } else { Join-Path $env:ProgramFiles 'dotnet\dotnet.exe' }
+if (-not (Test-Path -LiteralPath $dotnet)) {
+    throw 'dotnet SDK was not found. Install Microsoft.DotNet.SDK.10 first.'
+}
+
 & (Join-Path $PSScriptRoot 'Test-PublicSafety.ps1')
 
 $artifacts = Join-Path $repoRoot 'artifacts'
@@ -32,10 +38,10 @@ New-Item -ItemType Directory -Path $publish -Force | Out-Null
 
 Push-Location $repoRoot
 try {
-    dotnet restore .\CodexBridge.sln
+    & $dotnet restore .\CodexBridge.sln
     if ($LASTEXITCODE -ne 0) { throw 'dotnet restore failed.' }
 
-    dotnet test .\CodexBridge.sln -c Release --no-restore --nologo
+    & $dotnet test .\CodexBridge.sln -c Release --no-restore --nologo
     if ($LASTEXITCODE -ne 0) { throw 'dotnet test failed.' }
 
     $publishArgs = @(
@@ -44,13 +50,14 @@ try {
         '-p:PublishTrimmed=false', '-p:DebugType=None', '-p:DebugSymbols=false',
         "-p:Version=$Version", '--output', $publish
     )
-    dotnet publish .\src\CodexBridge.App\CodexBridge.App.csproj @publishArgs
+    & $dotnet publish .\src\CodexBridge.App\CodexBridge.App.csproj @publishArgs
     if ($LASTEXITCODE -ne 0) { throw 'App publish failed.' }
-    dotnet publish .\src\CodexBridge.Agent\CodexBridge.Agent.csproj @publishArgs
+    & $dotnet publish .\src\CodexBridge.Agent\CodexBridge.Agent.csproj @publishArgs
     if ($LASTEXITCODE -ne 0) { throw 'Agent publish failed.' }
 
     Copy-Item -LiteralPath .\README.md -Destination $publish
     Copy-Item -LiteralPath .\LICENSE -Destination $publish
+    & (Join-Path $PSScriptRoot 'Test-ReleaseSmoke.ps1') -PublishDirectory $publish
 
     $zip = Join-Path $artifacts "CodexBridge-$Version-win-x64.zip"
     Compress-Archive -Path (Join-Path $publish '*') -DestinationPath $zip -CompressionLevel Optimal

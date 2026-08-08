@@ -24,8 +24,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'restic init failed.' }
     restic -r $repository backup $source --tag codexbridge --json
     if ($LASTEXITCODE -ne 0) { throw 'restic backup failed.' }
-    restic -r $repository check | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'restic check failed.' }
+    [IO.File]::WriteAllText((Join-Path $source 'sample.txt'), 'codexbridge-restic-v2')
+    restic -r $repository backup $source --tag codexbridge --json
+    if ($LASTEXITCODE -ne 0) { throw 'second restic backup failed.' }
+    restic -r $repository check --read-data-subset=5% | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'restic deep check failed.' }
+    restic -r $repository forget --tag codexbridge --keep-daily 1 --prune | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'restic retention failed.' }
+    $snapshots = @(restic -r $repository snapshots --tag codexbridge --json | ConvertFrom-Json)
+    if ($snapshots.Count -ne 1) { throw "Expected one retained snapshot, found $($snapshots.Count)." }
     restic -r $repository restore latest --target $restore
     if ($LASTEXITCODE -ne 0) { throw 'restic restore failed.' }
 
@@ -35,7 +42,7 @@ try {
         Get-ChildItem -LiteralPath $restore -Recurse -Force | ForEach-Object { Write-Host "RESTORED=$($_.FullName)" }
         throw 'Restored sample was not found.'
     }
-    if ([IO.File]::ReadAllText($sample.FullName) -ne 'codexbridge-restic-ok') { throw 'Restored sample content differs.' }
+    if ([IO.File]::ReadAllText($sample.FullName) -ne 'codexbridge-restic-v2') { throw 'Restored sample content differs.' }
 
     Write-Host "RESTIC_INTEGRATION_OK=$($sample.FullName.Substring($restore.Length).TrimStart('\'))"
 }

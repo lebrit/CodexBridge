@@ -73,6 +73,10 @@ public sealed class SettingsStore(JsonFileStore files)
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        settings.SchemaVersion = 2;
+        settings.KeepDaily = Math.Clamp(settings.KeepDaily, 1, 365);
+        settings.KeepWeekly = Math.Clamp(settings.KeepWeekly, 1, 104);
+        settings.KeepMonthly = Math.Clamp(settings.KeepMonthly, 1, 120);
         return settings;
     }
 
@@ -188,23 +192,30 @@ public static class BackupFiles
         await File.WriteAllLinesAsync(AppPaths.ExcludesFile, Excludes, cancellationToken);
     }
 
-    public static List<ManifestEnvironmentItem> DiscoverEnvironment()
+    public static List<ManifestEnvironmentItem> DiscoverEnvironment(bool includeVsCode)
     {
         var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var candidates = new[]
+        var candidates = new List<ManifestEnvironmentItem>
         {
             Item("Codex config", Path.Combine(profile, ".codex", "config.toml"), "{UserProfile}\\.codex\\config.toml"),
             Item("Codex rules", Path.Combine(profile, ".codex", "rules"), "{UserProfile}\\.codex\\rules"),
             Item("Codex memories", Path.Combine(profile, ".codex", "memories"), "{UserProfile}\\.codex\\memories"),
             Item("Legacy Codex skills", Path.Combine(profile, ".codex", "skills"), "{UserProfile}\\.codex\\skills"),
             Item("User agent skills", Path.Combine(profile, ".agents", "skills"), "{UserProfile}\\.agents\\skills"),
-            Item("VS Code settings", Path.Combine(appData, "Code", "User", "settings.json"), "{AppData}\\Code\\User\\settings.json"),
-            Item("VS Code keybindings", Path.Combine(appData, "Code", "User", "keybindings.json"), "{AppData}\\Code\\User\\keybindings.json"),
-            Item("VS Code snippets", Path.Combine(appData, "Code", "User", "snippets"), "{AppData}\\Code\\User\\snippets"),
-            Item("WinGet app inventory", AppPaths.AppInventoryFile, "{UserProfile}\\CodexBridge-Recovery\\winget-packages.json"),
-            Item("VS Code extensions", AppPaths.VsCodeExtensionsFile, "{UserProfile}\\CodexBridge-Recovery\\vscode-extensions.txt")
+            Item("WinGet app inventory", AppPaths.AppInventoryFile, "{UserProfile}\\CodexBridge-Recovery\\winget-packages.json")
         };
+
+        if (includeVsCode)
+        {
+            candidates.AddRange(
+            [
+                Item("VS Code settings", Path.Combine(appData, "Code", "User", "settings.json"), "{AppData}\\Code\\User\\settings.json"),
+                Item("VS Code keybindings", Path.Combine(appData, "Code", "User", "keybindings.json"), "{AppData}\\Code\\User\\keybindings.json"),
+                Item("VS Code snippets", Path.Combine(appData, "Code", "User", "snippets"), "{AppData}\\Code\\User\\snippets"),
+                Item("VS Code extensions", AppPaths.VsCodeExtensionsFile, "{UserProfile}\\CodexBridge-Recovery\\vscode-extensions.txt")
+            ]);
+        }
 
         return candidates.Where(item => File.Exists(item.SourcePath) || Directory.Exists(item.SourcePath)).ToList();
     }
@@ -219,7 +230,27 @@ public static class BackupFiles
 
 public sealed class ToolInventoryService(ProcessRunner processes)
 {
-    public async Task<OperationResult> CaptureAsync(CancellationToken cancellationToken = default)
+    public static string? FindVsCodeExecutable()
+    {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        return new[]
+        {
+            Path.Combine(local, "Programs", "Microsoft VS Code", "Code.exe"),
+            Path.Combine(programFiles, "Microsoft VS Code", "Code.exe"),
+            Path.Combine(programFilesX86, "Microsoft VS Code", "Code.exe"),
+            Path.Combine(local, "Programs", "Microsoft VS Code Insiders", "Code - Insiders.exe")
+        }.FirstOrDefault(File.Exists);
+    }
+
+    public static IReadOnlyList<string> ParseExtensions(string content) =>
+        content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => line.Contains('.') && !line.StartsWith('#'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    public async Task<OperationResult> CaptureAsync(bool includeVsCode, CancellationToken cancellationToken = default)
     {
         AppPaths.EnsureCreated();
         var winget = await processes.RunAsync("winget.exe",
@@ -228,18 +259,33 @@ public sealed class ToolInventoryService(ProcessRunner processes)
             "--accept-source-agreements", "--disable-interactivity"
         ], cancellationToken: cancellationToken);
 
-        var code = await processes.RunAsync("code.cmd", ["--list-extensions", "--show-versions"], cancellationToken: cancellationToken);
-        if (code.Succeeded)
-            await File.WriteAllTextAsync(AppPaths.VsCodeExtensionsFile, code.Output, cancellationToken);
+        OperationResult? vsCode = null;
+        if (includeVsCode)
+        {
+            var executable = FindVsCodeExecutable();
+            if (executable is null)
+            {
+                vsCode = OperationResult.Fail("VS Code не обнаружен; его данные пропущены.");
+            }
+            else
+            {
+                var code = await processes.RunAsync(executable, ["--list-extensions", "--show-versions"], cancellationToken: cancellationToken);
+                if (code.Succeeded)
+                    await File.WriteAllTextAsync(AppPaths.VsCodeExtensionsFile, code.Output, cancellationToken);
+                vsCode = code.Succeeded
+                    ? OperationResult.Ok("Список расширений VS Code обновлён.")
+                    : OperationResult.Fail("Не удалось получить список расширений VS Code.", code.Combined);
+            }
+        }
 
         return winget.Succeeded
-            ? OperationResult.Ok(code.Succeeded
+            ? OperationResult.Ok(vsCode?.Succeeded == true
                 ? "Список программ и расширений VS Code обновлён."
-                : "Список программ обновлён; VS Code CLI не найден.")
+                : "Список программ обновлён.", vsCode?.Details ?? vsCode?.Message ?? "")
             : OperationResult.Fail("Не удалось обновить список программ.", winget.Combined);
     }
 
-    public async Task<OperationResult> InstallAppsAsync(CancellationToken cancellationToken = default)
+    public async Task<OperationResult> InstallAppsAsync(bool includeVsCode, CancellationToken cancellationToken = default)
     {
         var inventory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -252,8 +298,40 @@ public sealed class ToolInventoryService(ProcessRunner processes)
             "import", "--import-file", inventory, "--ignore-unavailable",
             "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"
         ], cancellationToken: cancellationToken);
-        return result.Succeeded
-            ? OperationResult.Ok("Установка доступных приложений завершена.", result.Output)
-            : OperationResult.Fail("Некоторые приложения установить не удалось.", result.Combined);
+
+        var vsCode = includeVsCode ? await InstallVsCodeExtensionsAsync(cancellationToken) : null;
+        var succeeded = result.Succeeded && (vsCode?.Succeeded ?? true);
+        var message = succeeded
+            ? includeVsCode ? "Установка приложений и расширений VS Code завершена." : "Установка доступных приложений завершена."
+            : "Некоторые приложения или расширения установить не удалось.";
+        var details = string.Join(Environment.NewLine, new[] { result.Combined, vsCode?.Details, vsCode?.Message }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
+        return succeeded ? OperationResult.Ok(message, details) : OperationResult.Fail(message, details);
+    }
+
+    private async Task<OperationResult> InstallVsCodeExtensionsAsync(CancellationToken cancellationToken)
+    {
+        var inventory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "CodexBridge-Recovery", "vscode-extensions.txt");
+        if (!File.Exists(inventory))
+            return OperationResult.Ok("Список расширений VS Code отсутствует; шаг пропущен.");
+
+        var executable = FindVsCodeExecutable();
+        if (executable is null)
+            return OperationResult.Fail("VS Code не установлен; расширения не восстановлены.");
+
+        var extensions = ParseExtensions(await File.ReadAllTextAsync(inventory, cancellationToken));
+        var failures = new List<string>();
+        foreach (var extension in extensions)
+        {
+            var result = await processes.RunAsync(executable, ["--install-extension", extension, "--force"], cancellationToken: cancellationToken);
+            if (!result.Succeeded)
+                failures.Add(extension);
+        }
+
+        return failures.Count == 0
+            ? OperationResult.Ok($"Установлено расширений VS Code: {extensions.Count}.")
+            : OperationResult.Fail($"Не установлено расширений VS Code: {failures.Count}.", string.Join(Environment.NewLine, failures));
     }
 }

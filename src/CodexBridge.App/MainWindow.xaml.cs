@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Windows;
@@ -16,6 +17,7 @@ public partial class MainWindow : Window
     private readonly CatalogStore _catalogStore;
     private readonly StateStore _stateStore;
     private readonly DpapiSecretStore _secrets = new();
+    private readonly ProcessRunner _processes = new();
     private readonly ResticService _restic;
     private readonly ProjectDiscoveryService _discovery;
     private readonly SchedulerService _scheduler;
@@ -36,12 +38,11 @@ public partial class MainWindow : Window
         _settingsStore = new SettingsStore(_files);
         _catalogStore = new CatalogStore(_files);
         _stateStore = new StateStore(_files);
-        var runner = new ProcessRunner();
-        _restic = new ResticService(runner);
+        _restic = new ResticService(_processes);
         _discovery = new ProjectDiscoveryService(_catalogStore);
-        _scheduler = new SchedulerService(runner);
-        _toolInstaller = new BackupToolInstaller(runner);
-        _toolInventory = new ToolInventoryService(runner);
+        _scheduler = new SchedulerService(_processes);
+        _toolInstaller = new BackupToolInstaller(_processes);
+        _toolInventory = new ToolInventoryService(_processes);
         _restore = new RestoreService(_restic, _files);
 
         VersionText.Text = "Версия " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev");
@@ -71,6 +72,14 @@ public partial class MainWindow : Window
             CloudRepositoryText.Text = _settings.CloudRepository;
             CloudEnabledCheck.IsChecked = _settings.CloudEnabled;
             DestinationText.Text = _settings.DestinationRoot;
+            RetentionEnabledCheck.IsChecked = _settings.RetentionEnabled;
+            KeepDailyText.Text = _settings.KeepDaily.ToString();
+            KeepWeeklyText.Text = _settings.KeepWeekly.ToString();
+            KeepMonthlyText.Text = _settings.KeepMonthly.ToString();
+
+            var vsCodeAvailable = ToolInventoryService.FindVsCodeExecutable() is not null;
+            VsCodeCard.Visibility = vsCodeAvailable ? Visibility.Visible : Visibility.Collapsed;
+            VsCodeIncludeCheck.IsChecked = vsCodeAvailable && _settings.IncludeVsCode;
 
             ReplaceProjects(await _catalogStore.LoadAsync());
             await RefreshDashboardAsync();
@@ -230,6 +239,30 @@ public partial class MainWindow : Window
         });
     }
 
+    private async void DeepCheckRepository_Click(object sender, RoutedEventArgs e)
+    {
+        var confirmation = MessageBox.Show(this,
+            "Прочитать и проверить случайные 5% данных выбранного хранилища? Для облака это может занять время и использовать трафик.",
+            "Глубокая проверка", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        await RunBusyAsync("Глубокая проверка данных…", async () =>
+        {
+            await SaveSettingsCoreAsync();
+            var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
+            var result = await _restic.CheckAsync(_settings.ResticExecutable, SelectedRepository(), password, deep: true);
+            ShowResult(result);
+            if (result.Succeeded)
+            {
+                var state = await _stateStore.LoadAsync();
+                state.LastCheckUtc = DateTimeOffset.UtcNow;
+                await _stateStore.SaveAsync(state);
+            }
+            await RefreshDashboardAsync();
+        });
+    }
+
     private async void InstallScheduler_Click(object sender, RoutedEventArgs e)
     {
         await SaveSettingsCoreAsync();
@@ -256,19 +289,83 @@ public partial class MainWindow : Window
     private async void CaptureApps_Click(object sender, RoutedEventArgs e)
     {
         await RunBusyAsync("Обновление списка программ…", async () =>
-            ShowResult(await _toolInventory.CaptureAsync()));
+        {
+            await SaveSettingsCoreAsync();
+            ShowResult(await _toolInventory.CaptureAsync(_settings.IncludeVsCode));
+        });
     }
 
     private async void InstallApps_Click(object sender, RoutedEventArgs e)
     {
         var confirmation = MessageBox.Show(this,
-            "Установить доступные приложения из восстановленного WinGet-списка? Для некоторых установщиков может потребоваться UAC.",
+            _settings.IncludeVsCode
+                ? "Установить доступные приложения и расширения VS Code из восстановленных списков? Для некоторых установщиков может потребоваться UAC."
+                : "Установить доступные приложения из восстановленного WinGet-списка? Для некоторых установщиков может потребоваться UAC.",
             "Установка программ", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (confirmation != MessageBoxResult.Yes)
             return;
 
         await RunBusyAsync("Установка приложений…", async () =>
-            ShowResult(await _toolInventory.InstallAppsAsync()));
+            ShowResult(await _toolInventory.InstallAppsAsync(_settings.IncludeVsCode)));
+    }
+
+    private void ConfigureRclone_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("rclone.exe", "config") { UseShellExecute = true });
+            AppendLog("Открыт интерактивный мастер rclone. После настройки нажмите «Найти настроенные remotes».");
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, "Сначала установите rclone.\n\n" + exception.Message,
+                "rclone не найден", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private async void DetectRcloneRemotes_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync("Поиск rclone remotes…", async () =>
+        {
+            var result = await _processes.RunAsync("rclone.exe", ["listremotes"]);
+            if (!result.Succeeded)
+                throw new InvalidOperationException("Не удалось прочитать настройки rclone.\n" + result.Combined);
+
+            var remotes = result.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(value => value.TrimEnd(':')).Where(value => value.Length > 0).ToList();
+            if (remotes.Count == 0)
+                throw new InvalidOperationException("Настроенные rclone remotes не найдены.");
+
+            RcloneRemoteNameText.Text = remotes[0];
+            AppendLog("Найдены rclone remotes: " + string.Join(", ", remotes));
+            UseRcloneRemote();
+        });
+    }
+
+    private void UseRcloneRemote_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            UseRcloneRemote();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "rclone", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void UseRcloneRemote()
+    {
+        var name = RcloneRemoteNameText.Text.Trim().TrimEnd(':');
+        if (name.StartsWith("rclone:", StringComparison.OrdinalIgnoreCase))
+            name = name[7..].TrimEnd(':');
+        if (string.IsNullOrWhiteSpace(name))
+            throw new InvalidOperationException("Укажите имя rclone remote.");
+        if (name.Contains(':'))
+            throw new InvalidOperationException("Укажите только имя remote без пути и дополнительных двоеточий.");
+
+        CloudRepositoryText.Text = $"rclone:{name}:CodexBridge/restic-v1";
+        CloudEnabledCheck.IsChecked = true;
     }
 
     private async void LoadSnapshots_Click(object sender, RoutedEventArgs e)
@@ -342,7 +439,20 @@ public partial class MainWindow : Window
         _settings.CloudRepository = CloudRepositoryText.Text.Trim();
         _settings.CloudEnabled = CloudEnabledCheck.IsChecked == true;
         _settings.DestinationRoot = DestinationText.Text.Trim();
+        if (VsCodeCard.Visibility == Visibility.Visible)
+            _settings.IncludeVsCode = VsCodeIncludeCheck.IsChecked == true;
+        _settings.RetentionEnabled = RetentionEnabledCheck.IsChecked == true;
+        _settings.KeepDaily = ParseRetention(KeepDailyText, "Дни", 365);
+        _settings.KeepWeekly = ParseRetention(KeepWeeklyText, "Недели", 104);
+        _settings.KeepMonthly = ParseRetention(KeepMonthlyText, "Месяцы", 120);
         await _settingsStore.SaveAsync(_settings);
+    }
+
+    private static int ParseRetention(TextBox input, string name, int maximum)
+    {
+        if (!int.TryParse(input.Text, out var value) || value < 1 || value > maximum)
+            throw new InvalidOperationException($"Поле «{name}» должно содержать число от 1 до {maximum}.");
+        return value;
     }
 
     private string SelectedRepository() => CloudSourceRadio.IsChecked == true

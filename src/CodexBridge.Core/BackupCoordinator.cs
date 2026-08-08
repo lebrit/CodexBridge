@@ -42,8 +42,9 @@ public sealed class BackupCoordinator(
             if (protectedProjects.Count == 0)
                 return await FinishAsync(false, "Не найдено защищённых проектов.", cancellationToken);
 
-            await new ToolInventoryService(new ProcessRunner()).CaptureAsync(cancellationToken);
-            var environment = BackupFiles.DiscoverEnvironment();
+            var includeVsCode = settings.IncludeVsCode && ToolInventoryService.FindVsCodeExecutable() is not null;
+            await new ToolInventoryService(new ProcessRunner()).CaptureAsync(includeVsCode, cancellationToken);
+            var environment = BackupFiles.DiscoverEnvironment(includeVsCode);
             var manifest = new BackupManifest
             {
                 ApplicationVersion = Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown",
@@ -79,6 +80,7 @@ public sealed class BackupCoordinator(
 
             var state = await stateStore.LoadAsync(cancellationToken);
             state.LastLocalBackupUtc = DateTimeOffset.UtcNow;
+            var cloudBackedUp = false;
 
             if (settings.CloudEnabled && !string.IsNullOrWhiteSpace(settings.CloudRepository))
             {
@@ -92,6 +94,32 @@ public sealed class BackupCoordinator(
                 }
 
                 state.LastCloudBackupUtc = DateTimeOffset.UtcNow;
+                cloudBackedUp = true;
+            }
+
+            if (settings.RetentionEnabled)
+            {
+                var targets = new List<(string Name, string Repository)> { ("локальное", settings.LocalRepository) };
+                if (cloudBackedUp)
+                    targets.Add(("облачное", settings.CloudRepository));
+
+                var failures = new List<string>();
+                foreach (var target in targets)
+                {
+                    var retention = await restic.ApplyRetentionAsync(
+                        settings.ResticExecutable, target.Repository, password,
+                        settings.KeepDaily, settings.KeepWeekly, settings.KeepMonthly, cancellationToken);
+                    if (!retention.Succeeded)
+                        failures.Add($"{target.Name}: {retention.Message}");
+                }
+
+                if (failures.Count > 0)
+                {
+                    state.LastRunSucceeded = false;
+                    state.LastMessage = "Новые копии готовы, но очистка старых снимков требует внимания.";
+                    await stateStore.SaveAsync(state, cancellationToken);
+                    return OperationResult.Fail(state.LastMessage, string.Join(Environment.NewLine, failures));
+                }
             }
 
             state.LastRunSucceeded = true;

@@ -61,6 +61,7 @@
                                         <Button Content="Найти проекты" Click="RefreshProjects_Click"/>
                                         <Button Style="{StaticResource PrimaryButton}" Content="Создать копию сейчас" Click="BackupNow_Click"/>
                                         <Button Content="Проверить хранилище" Click="CheckRepository_Click"/>
+                                        <Button Content="Глубокая проверка 5%" Click="DeepCheckRepository_Click"/>
                                         <Button Content="Включить автобэкап" Click="InstallScheduler_Click"/>
                                     </WrapPanel>
                                 </StackPanel>
@@ -129,19 +130,29 @@
                 </TabItem>
 
                 <TabItem>
-                    <Border Style="{StaticResource PanelCard}" MaxWidth="840" HorizontalAlignment="Left" VerticalAlignment="Top">
-                        <StackPanel>
-                            <TextBlock Text="Перенос приложений" FontSize="19" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                            <TextBlock Text="CodexBridge сохраняет WinGet-манифест и список расширений VS Code. Пароли, лицензии и учётные данные не копируются."
-                                       TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,18"/>
-                            <WrapPanel>
-                                <Button Style="{StaticResource PrimaryButton}" Content="Обновить список программ" Click="CaptureApps_Click"/>
-                                <Button Content="Установить после восстановления" Click="InstallApps_Click"/>
-                            </WrapPanel>
-                            <TextBlock Text="Недоступные в WinGet программы будут пропущены. Расширения VS Code сохраняются как проверочный список."
-                                       TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,8,0,0"/>
-                        </StackPanel>
-                    </Border>
+                    <StackPanel MaxWidth="840" HorizontalAlignment="Left" VerticalAlignment="Top">
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Перенос приложений" FontSize="19" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <TextBlock Text="CodexBridge сохраняет WinGet-манифест. Пароли, лицензии и учётные данные не копируются."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,18"/>
+                                <WrapPanel>
+                                    <Button Style="{StaticResource PrimaryButton}" Content="Обновить список программ" Click="CaptureApps_Click"/>
+                                    <Button Content="Установить после восстановления" Click="InstallApps_Click"/>
+                                </WrapPanel>
+                                <TextBlock Text="Недоступные в WinGet программы будут пропущены."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="VsCodeCard" Style="{StaticResource PanelCard}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="VS Code обнаружен" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <CheckBox x:Name="VsCodeIncludeCheck" Content="Сохранять настройки и список расширений VS Code" Margin="0,0,0,8"/>
+                                <TextBlock Text="После восстановления расширения можно установить той же кнопкой вместе с приложениями."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
                 </TabItem>
 
                 <TabItem>
@@ -176,9 +187,34 @@
                             <GroupBox Header="Облачная копия">
                                 <StackPanel>
                                     <CheckBox x:Name="CloudEnabledCheck" Content="Включить облачный бэкап после локального" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Имя rclone remote"/>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="Подставить адрес" Click="UseRcloneRemote_Click"/>
+                                        <TextBox x:Name="RcloneRemoteNameText"/>
+                                    </DockPanel>
+                                    <WrapPanel>
+                                        <Button Content="Открыть мастер rclone" Click="ConfigureRclone_Click"/>
+                                        <Button Content="Найти настроенные remotes" Click="DetectRcloneRemotes_Click"/>
+                                    </WrapPanel>
                                     <TextBlock Text="Restic/rclone адрес, например rclone:my-remote:CodexBridge/restic-v1"/>
                                     <TextBox x:Name="CloudRepositoryText"/>
                                     <Button Content="Создать/подключить облачное хранилище" HorizontalAlignment="Left" Click="InitializeCloud_Click"/>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="Хранение снимков">
+                                <StackPanel>
+                                    <CheckBox x:Name="RetentionEnabledCheck" Content="Автоматически удалять лишние старые снимки после успешного backup" Margin="0,0,0,10"/>
+                                    <WrapPanel>
+                                        <TextBlock Text="Дней" VerticalAlignment="Center" Margin="0,0,6,8"/>
+                                        <TextBox x:Name="KeepDailyText" Width="55"/>
+                                        <TextBlock Text="Недель" VerticalAlignment="Center" Margin="12,0,6,8"/>
+                                        <TextBox x:Name="KeepWeeklyText" Width="55"/>
+                                        <TextBlock Text="Месяцев" VerticalAlignment="Center" Margin="12,0,6,8"/>
+                                        <TextBox x:Name="KeepMonthlyText" Width="55"/>
+                                    </WrapPanel>
+                                    <TextBlock Text="По умолчанию функция выключена. При включении restic оставляет 7 дневных, 4 недельных и 6 месячных снимков."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
                                 </StackPanel>
                             </GroupBox>
 

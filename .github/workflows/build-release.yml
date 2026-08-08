@@ -28,7 +28,9 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $version = "0.1.$env:GITHUB_RUN_NUMBER-build.$env:GITHUB_RUN_ATTEMPT"
+          [xml]$props = Get-Content Directory.Build.props -Raw
+          $baseVersion = [string]$props.Project.PropertyGroup.VersionPrefix
+          $version = "$baseVersion-build.$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT"
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Build, test and package

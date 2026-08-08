@@ -58,4 +58,20 @@ public sealed class CoreTests
         Assert.False(PathPolicy.IsInside(sibling, root));
         Assert.True(PathPolicy.IsInside(Path.Combine(root, "project"), root));
     }
+
+    [Fact]
+    public void ParseExtensions_removes_comments_blanks_and_duplicates()
+    {
+        var result = ToolInventoryService.ParseExtensions("publisher.one@1.0\r\n# note\r\n\r\nPublisher.One@1.0\r\npublisher.two");
+
+        Assert.Equal(["publisher.one@1.0", "publisher.two"], result, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DiscoverEnvironment_excludes_vscode_when_disabled()
+    {
+        var result = BackupFiles.DiscoverEnvironment(includeVsCode: false);
+
+        Assert.DoesNotContain(result, item => item.Name.StartsWith("VS Code", StringComparison.OrdinalIgnoreCase));
+    }
 }

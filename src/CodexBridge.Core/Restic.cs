@@ -131,12 +131,38 @@ public sealed class ResticService(ProcessRunner processes)
         string executable,
         string repository,
         string password,
+        bool deep = false,
         CancellationToken cancellationToken = default)
     {
-        var result = await RunAsync(executable, repository, password, ["check"], cancellationToken);
+        var arguments = new List<string> { "check" };
+        if (deep)
+            arguments.Add("--read-data-subset=5%");
+        var result = await RunAsync(executable, repository, password, arguments, cancellationToken);
         return result.Succeeded
-            ? OperationResult.Ok("Проверка репозитория завершена.", LastNonEmptyLine(result.Output))
+            ? OperationResult.Ok(deep ? "Глубокая проверка 5% данных завершена." : "Проверка репозитория завершена.", LastNonEmptyLine(result.Output))
             : OperationResult.Fail("Проверка репозитория завершилась ошибкой.", result.Combined);
+    }
+
+    public async Task<OperationResult> ApplyRetentionAsync(
+        string executable,
+        string repository,
+        string password,
+        int keepDaily,
+        int keepWeekly,
+        int keepMonthly,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await RunAsync(executable, repository, password,
+        [
+            "forget", "--tag", "codexbridge",
+            "--keep-daily", Math.Clamp(keepDaily, 1, 365).ToString(),
+            "--keep-weekly", Math.Clamp(keepWeekly, 1, 104).ToString(),
+            "--keep-monthly", Math.Clamp(keepMonthly, 1, 120).ToString(),
+            "--prune"
+        ], cancellationToken);
+        return result.Succeeded
+            ? OperationResult.Ok("Политика хранения применена.", LastNonEmptyLine(result.Output))
+            : OperationResult.Fail("Не удалось применить политику хранения.", result.Combined);
     }
 
     public async Task<OperationResult> RestoreRawAsync(
