@@ -2,7 +2,7 @@
 
 ## Current status
 
-CodexBridge is preparing an application to the SignPath Foundation open-source program. Current releases are unsigned unless their release notes explicitly state that Authenticode signing was completed and verified.
+CodexBridge submitted an application to the SignPath Foundation open-source program on August 8, 2026 and is awaiting review. Current releases are unsigned unless their release notes explicitly state that Authenticode signing was completed and verified.
 
 After approval, signed releases will include this notice:
 
