@@ -55,9 +55,16 @@ jobs:
         run: |
           $zip = (Get-ChildItem artifacts\CodexBridge-*.zip -File).FullName
           $hash = (Get-ChildItem artifacts\CodexBridge-*.sha256 -File).FullName
+          $notes = @"
+          Automatic Windows x64 build from $env:GITHUB_SHA. Includes tests and public-safety validation.
+
+          Code signing policy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md
+
+          This build is unsigned unless its Authenticode signature proves otherwise. After SignPath approval, signed releases will state: Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+          "@
           gh release create "v$env:VERSION" $zip $hash `
             --repo "$env:GITHUB_REPOSITORY" `
             --target "$env:GITHUB_SHA" `
             --title "CodexBridge $env:VERSION" `
-            --notes "Automatic Windows x64 build from $env:GITHUB_SHA. Includes tests and public-safety validation." `
+            --notes $notes `
             --prerelease
