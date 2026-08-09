@@ -214,7 +214,8 @@ public partial class MainWindow : Window
         {
             await SaveSettingsCoreAsync();
             SavePasswordIfEntered();
-            await _discovery.SaveAsync(Projects);
+            var discovery = await _discovery.RefreshAsync(_settings);
+            ReplaceProjects(discovery.Projects);
             var coordinator = new BackupCoordinator(_settingsStore, _catalogStore, _stateStore, _files, _secrets, _restic);
             ShowResult(await coordinator.RunAsync());
             await RefreshDashboardAsync();
@@ -512,7 +513,9 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             AppendLog("Ошибка: " + exception.Message);
-            MessageBox.Show(this, exception.Message, "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Error);
+            var logPath = ErrorLog.Write("Интерфейс", exception.Message, exception.ToString());
+            var logHint = string.IsNullOrWhiteSpace(logPath) ? "" : $"\n\nПодробности записаны в:\n{logPath}";
+            MessageBox.Show(this, exception.Message + logHint, "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
@@ -527,7 +530,11 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(result.Details))
             AppendLog(result.Details);
         if (!result.Succeeded)
-            MessageBox.Show(this, result.Message, "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Warning);
+        {
+            var logPath = ErrorLog.Write("Операция CodexBridge", result.Message, result.Details);
+            var logHint = string.IsNullOrWhiteSpace(logPath) ? "" : $"\n\nПодробности записаны в:\n{logPath}";
+            MessageBox.Show(this, result.Message + logHint, "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void AppendLog(string message)

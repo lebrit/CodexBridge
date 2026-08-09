@@ -74,4 +74,26 @@ public sealed class CoreTests
 
         Assert.DoesNotContain(result, item => item.Name.StartsWith("VS Code", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public void ErrorLog_writes_utf8_file_only_when_called()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            Assert.False(Directory.Exists(directory));
+            var path = ErrorLog.Write("Тест", "Ошибка снимка", "Техническая причина", directory);
+
+            Assert.Equal(Path.Combine(directory, ErrorLog.FileName), path);
+            var contents = File.ReadAllText(path);
+            Assert.Contains("Ошибка снимка", contents);
+            Assert.Contains("Техническая причина", contents);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, true);
+        }
+    }
 }

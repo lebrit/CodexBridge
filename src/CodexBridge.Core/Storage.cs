@@ -20,6 +20,7 @@ public static class AppPaths
     public static string RestoreDirectory => Path.Combine(DataDirectory, "restore");
     public static string AppInventoryFile => Path.Combine(DataDirectory, "winget-packages.json");
     public static string VsCodeExtensionsFile => Path.Combine(DataDirectory, "vscode-extensions.txt");
+    public static string BackupLockFile => Path.Combine(DataDirectory, "backup.lock");
 
     public static void EnsureCreated()
     {

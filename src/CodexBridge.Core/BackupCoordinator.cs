@@ -12,22 +12,19 @@ public sealed class BackupCoordinator(
 {
     public async Task<OperationResult> RunAsync(CancellationToken cancellationToken = default)
     {
-        using var mutex = new Mutex(false, "Local\\CodexBridge.Backup");
-        var ownsMutex = false;
+        FileStream backupLock;
         try
         {
-            try
-            {
-                ownsMutex = mutex.WaitOne(0);
-            }
-            catch (AbandonedMutexException)
-            {
-                ownsMutex = true;
-            }
+            AppPaths.EnsureCreated();
+            backupLock = new FileStream(AppPaths.BackupLockFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException)
+        {
+            return OperationResult.Fail("Резервное копирование уже выполняется.");
+        }
 
-            if (!ownsMutex)
-                return OperationResult.Fail("Резервное копирование уже выполняется.");
-
+        using (backupLock)
+        {
             var settings = await settingsStore.LoadAsync(cancellationToken);
             var projects = await catalogStore.LoadAsync(cancellationToken);
             var password = secrets.Load();
@@ -66,6 +63,15 @@ public sealed class BackupCoordinator(
             var projectPaths = PathPolicy.ReduceNestedRoots(protectedProjects.Select(project => project.Path));
             if (projectPaths.Any(path => PathPolicy.IsInside(settings.LocalRepository, path)))
                 return await FinishAsync(false, "Локальный backup находится внутри защищаемого проекта. Выберите другой каталог.", cancellationToken);
+
+            var localConfig = Path.Combine(Path.GetFullPath(settings.LocalRepository), "config");
+            if (!File.Exists(localConfig))
+            {
+                var initialization = await restic.InitializeAsync(
+                    settings.ResticExecutable, settings.LocalRepository, password, cancellationToken);
+                if (!initialization.Succeeded)
+                    return await FinishAsync(false, initialization.Message, cancellationToken, initialization.Details);
+            }
 
             var sources = projectPaths
                 .Concat(environment.Select(item => item.SourcePath))
@@ -126,11 +132,6 @@ public sealed class BackupCoordinator(
             state.LastMessage = settings.CloudEnabled ? "Локальная и облачная копии готовы." : "Локальная копия готова.";
             await stateStore.SaveAsync(state, cancellationToken);
             return OperationResult.Ok(state.LastMessage, local.Details);
-        }
-        finally
-        {
-            if (ownsMutex)
-                mutex.ReleaseMutex();
         }
     }
 
