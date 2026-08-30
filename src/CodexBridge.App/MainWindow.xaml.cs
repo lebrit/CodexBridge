@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private DashboardAction _dashboardAction = DashboardAction.OpenSetup;
     private DateTime _stateLastWriteUtc;
     private bool _externalRefreshRunning;
+    private CancellationTokenSource? _operationCancellation;
 
     public ObservableCollection<ProjectEntry> Projects { get; } = [];
     public ObservableCollection<string> Roots { get; } = [];
@@ -257,10 +258,10 @@ public partial class MainWindow : Window
 
     private async void RefreshProjects_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Поиск проектов…", async () =>
+        await RunBusyAsync("Поиск проектов…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
-            var result = await _discovery.RefreshAsync(_settings);
+            var result = await _discovery.RefreshAsync(_settings, cancellationToken);
             ReplaceProjects(result.Projects);
             AppendLog($"Просканировано каталогов: {result.ScannedDirectories}. Проектов: {result.Projects.Count}.");
             foreach (var warning in result.Warnings.Take(20))
@@ -370,26 +371,27 @@ public partial class MainWindow : Window
 
     private async Task InitializeRepositoryAsync(bool cloud)
     {
-        await RunBusyAsync("Подключение хранилища…", async () =>
+        await RunBusyAsync("Подключение хранилища…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
             _secrets.Save(password);
             var repository = cloud ? _settings.CloudRepository : _settings.LocalRepository;
-            await ShowResultAsync(await _restic.InitializeAsync(_settings.ResticExecutable, repository, password));
+            await ShowResultAsync(await _restic.InitializeAsync(
+                _settings.ResticExecutable, repository, password, cancellationToken));
             await RefreshDashboardAsync();
         });
     }
 
     private async void BackupNow_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Создание резервной копии…", async () =>
+        await RunBusyAsync("Создание резервной копии…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
             SavePasswordIfEntered();
             var coordinator = new BackupCoordinator(_settingsStore, _catalogStore, _stateStore, _files, _secrets, _restic);
-            var result = await coordinator.RunAsync();
-            ReplaceProjects(await _catalogStore.LoadAsync());
+            var result = await coordinator.RunAsync(cancellationToken: cancellationToken);
+            ReplaceProjects(await _catalogStore.LoadAsync(cancellationToken));
             await ShowResultAsync(result, recordActivity: false);
             await RefreshDashboardAsync();
         });
@@ -397,11 +399,13 @@ public partial class MainWindow : Window
 
     private async void CheckRepository_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Проверка хранилища…", async () =>
+        await RunBusyAsync("Проверка хранилища…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
-            var result = await _restic.CheckAsync(_settings.ResticExecutable, _settings.LocalRepository, password);
+            var result = await _restic.CheckAsync(
+                _settings.ResticExecutable, _settings.LocalRepository, password,
+                cancellationToken: cancellationToken);
             await ShowResultAsync(result);
             if (result.Succeeded)
             {
@@ -421,11 +425,13 @@ public partial class MainWindow : Window
         if (confirmation != MessageBoxResult.Yes)
             return;
 
-        await RunBusyAsync("Глубокая проверка данных…", async () =>
+        await RunBusyAsync("Глубокая проверка данных…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
-            var result = await _restic.CheckAsync(_settings.ResticExecutable, SelectedRepository(), password, deep: true);
+            var result = await _restic.CheckAsync(
+                _settings.ResticExecutable, SelectedRepository(), password,
+                deep: true, cancellationToken: cancellationToken);
             await ShowResultAsync(result);
             if (result.Succeeded)
             {
@@ -459,19 +465,19 @@ public partial class MainWindow : Window
 
     private async void InstallTools_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Установка restic и rclone…", async () =>
+        await RunBusyAsync("Установка restic и rclone…", async cancellationToken =>
         {
-            await ShowResultAsync(await _toolInstaller.InstallAsync());
+            await ShowResultAsync(await _toolInstaller.InstallAsync(cancellationToken));
             await RefreshDashboardAsync();
         });
     }
 
     private async void CaptureApps_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Обновление списка программ…", async () =>
+        await RunBusyAsync("Обновление списка программ…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
-            await ShowResultAsync(await _toolInventory.CaptureAsync(_settings.IncludeVsCode));
+            await ShowResultAsync(await _toolInventory.CaptureAsync(_settings.IncludeVsCode, cancellationToken));
         });
     }
 
@@ -485,8 +491,8 @@ public partial class MainWindow : Window
         if (confirmation != MessageBoxResult.Yes)
             return;
 
-        await RunBusyAsync("Установка приложений…", async () =>
-            await ShowResultAsync(await _toolInventory.InstallAppsAsync(_settings.IncludeVsCode)));
+        await RunBusyAsync("Установка приложений…", async cancellationToken =>
+            await ShowResultAsync(await _toolInventory.InstallAppsAsync(_settings.IncludeVsCode, cancellationToken)));
     }
 
     private void ConfigureRclone_Click(object sender, RoutedEventArgs e)
@@ -505,9 +511,10 @@ public partial class MainWindow : Window
 
     private async void DetectRcloneRemotes_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Поиск rclone remotes…", async () =>
+        await RunBusyAsync("Поиск rclone remotes…", async cancellationToken =>
         {
-            var result = await _processes.RunAsync("rclone.exe", ["listremotes"]);
+            var result = await _processes.RunAsync(
+                "rclone.exe", ["listremotes"], cancellationToken: cancellationToken);
             if (!result.Succeeded)
                 throw new InvalidOperationException("Не удалось прочитать настройки rclone.\n" + result.Combined);
 
@@ -550,11 +557,12 @@ public partial class MainWindow : Window
 
     private async void LoadSnapshots_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Загрузка снимков…", async () =>
+        await RunBusyAsync("Загрузка снимков…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
-            var snapshots = await _restic.SnapshotsAsync(_settings.ResticExecutable, SelectedRepository(), password);
+            var snapshots = await _restic.SnapshotsAsync(
+                _settings.ResticExecutable, SelectedRepository(), password, cancellationToken);
             Snapshots.Clear();
             foreach (var snapshot in snapshots)
                 Snapshots.Add(snapshot);
@@ -572,15 +580,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunBusyAsync("Полная проверка снимка…", async () =>
+        await RunBusyAsync("Проверка снимка и расчёт изменений…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
-            var result = await _restore.VerifySnapshotAsync(
-                _settings, SelectedRepository(), password, snapshot.Id);
-            var state = await _stateStore.LoadAsync();
-            state.RecordRestoreTest(result.Succeeded, result.Message);
-            await _stateStore.SaveAsync(state);
+            var result = await _restore.PlanRestoreAsync(
+                _settings, SelectedRepository(), password, snapshot.Id, DestinationText.Text, cancellationToken);
+            var state = await _stateStore.LoadAsync(cancellationToken);
+            state.RecordRestoreTest(result.Succeeded, result.Message, snapshotId: snapshot.Id);
+            await _stateStore.SaveAsync(state, cancellationToken);
             await ShowResultAsync(result, recordActivity: false);
             await RefreshDashboardAsync();
         });
@@ -594,20 +602,30 @@ public partial class MainWindow : Window
             return;
         }
 
+        var state = await _stateStore.LoadAsync();
+        var planIsCurrent = state.LastRestoreTestSucceeded
+            && string.Equals(state.LastRestoreTestSnapshotId, snapshot.Id, StringComparison.OrdinalIgnoreCase);
+        var planStatus = planIsCurrent
+            ? "Dry-run этого снимка успешно выполнен."
+            : "ВНИМАНИЕ: для выбранного снимка нет успешного актуального dry-run.";
         var confirmation = MessageBox.Show(this,
-            $"Восстановить снимок {snapshot.Id} в {DestinationText.Text}?\n\nСуществующие отличающиеся файлы не будут перезаписаны.",
-            "Подтверждение восстановления", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            $"Восстановить снимок {snapshot.Id} в {DestinationText.Text}?\n\n{planStatus}\nСуществующие отличающиеся файлы не будут перезаписаны.",
+            "Подтверждение восстановления", MessageBoxButton.YesNo,
+            planIsCurrent ? MessageBoxImage.Question : MessageBoxImage.Warning);
         if (confirmation != MessageBoxResult.Yes)
             return;
 
-        await RunBusyAsync("Восстановление снимка…", async () =>
+        await RunBusyAsync("Восстановление снимка…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
             await ShowResultAsync(await _restore.RestoreSnapshotAsync(
-                _settings, SelectedRepository(), password, snapshot.Id, DestinationText.Text));
+                _settings, SelectedRepository(), password, snapshot.Id, DestinationText.Text, cancellationToken));
         });
     }
+
+    private async void SnapshotsList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        await RefreshDashboardAsync();
 
     private void AddRoot_Click(object sender, RoutedEventArgs e)
     {
@@ -718,17 +736,22 @@ public partial class MainWindow : Window
             ? "История появится после первой операции."
             : state.LastMessage;
 
-        if (state.LastRestoreTestUtc is null)
+        var selectedSnapshot = SnapshotsList.SelectedItem as SnapshotInfo;
+        var selectedSnapshotWasTested = selectedSnapshot is not null
+            && string.Equals(state.LastRestoreTestSnapshotId, selectedSnapshot.Id, StringComparison.OrdinalIgnoreCase);
+        if (state.LastRestoreTestUtc is null || selectedSnapshot is not null && !selectedSnapshotWasTested)
         {
-            RestoreCheckTitleText.Text = "Проверка ещё не выполнялась";
-            RestoreCheckStatusText.Text = "Выберите снимок и запустите полную проверку перед восстановлением.";
+            RestoreCheckTitleText.Text = state.LastRestoreTestUtc is null
+                ? "Проверка ещё не выполнялась"
+                : "Выбранный снимок ещё не проверен";
+            RestoreCheckStatusText.Text = "Выберите папку проектов, затем запустите проверку и расчёт изменений.";
             RestoreCheckSymbol.Text = "?";
             RestoreCheckIcon.Background = (Brush)Application.Current.Resources["ButtonBackground"];
         }
         else
         {
             RestoreCheckTitleText.Text = state.LastRestoreTestSucceeded
-                ? "Снимок успешно проверен"
+                ? "Снимок проверен, изменения рассчитаны"
                 : "Последняя проверка не пройдена";
             RestoreCheckStatusText.Text = $"{FormatRelativeTime(state.LastRestoreTestUtc, "")} · {state.LastRestoreTestMessage}";
             RestoreCheckSymbol.Text = state.LastRestoreTestSucceeded ? "✓" : "!";
@@ -848,7 +871,16 @@ public partial class MainWindow : Window
         return value.Value.ToLocalTime().ToString("d");
     }
 
-    private async Task RunBusyAsync(string message, Func<Task> action)
+    private Task RunBusyAsync(string message, Func<Task> action) =>
+        RunBusyAsync(message, _ => action(), canCancel: false);
+
+    private Task RunBusyAsync(string message, Func<CancellationToken, Task> action) =>
+        RunBusyAsync(message, action, canCancel: true);
+
+    private async Task RunBusyAsync(
+        string message,
+        Func<CancellationToken, Task> action,
+        bool canCancel)
     {
         if (BusyPanel.Visibility == Visibility.Visible)
             return;
@@ -859,13 +891,25 @@ public partial class MainWindow : Window
         BusyElapsedText.Text = "";
         BusyPanel.Visibility = Visibility.Visible;
         BusyProgress.IsIndeterminate = true;
+        CancelBusyButton.Visibility = canCancel ? Visibility.Visible : Visibility.Collapsed;
+        CancelBusyButton.IsEnabled = canCancel;
+        _operationCancellation = new CancellationTokenSource();
         var stopwatch = Stopwatch.StartNew();
         var elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         elapsedTimer.Tick += (_, _) => BusyElapsedText.Text = $"{stopwatch.Elapsed:mm\\:ss}";
         elapsedTimer.Start();
         try
         {
-            await action();
+            await action(_operationCancellation.Token);
+        }
+        catch (OperationCanceledException) when (_operationCancellation.IsCancellationRequested)
+        {
+            const string cancelled = "Операция отменена пользователем.";
+            AppendLog(cancelled);
+            AddActivityToDashboard(true, cancelled);
+            var state = await _stateStore.LoadAsync();
+            state.RecordActivity(true, cancelled);
+            await _stateStore.SaveAsync(state);
         }
         catch (Exception exception)
         {
@@ -895,7 +939,20 @@ public partial class MainWindow : Window
             BusyPanel.Visibility = Visibility.Collapsed;
             BusyText.Text = "";
             BusyElapsedText.Text = "";
+            CancelBusyButton.Visibility = Visibility.Collapsed;
+            _operationCancellation.Dispose();
+            _operationCancellation = null;
         }
+    }
+
+    private void CancelBusy_Click(object sender, RoutedEventArgs e)
+    {
+        if (_operationCancellation is null || _operationCancellation.IsCancellationRequested)
+            return;
+
+        CancelBusyButton.IsEnabled = false;
+        BusyText.Text = "Безопасно останавливаем операцию…";
+        _operationCancellation.Cancel();
     }
 
     private async Task ShowResultAsync(OperationResult result, bool recordActivity = true)

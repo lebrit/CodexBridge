@@ -55,10 +55,11 @@ public sealed class CoreTests
         var timestamp = new DateTimeOffset(2026, 8, 30, 9, 0, 0, TimeSpan.Zero);
         var state = new BackupState();
 
-        state.RecordRestoreTest(false, "Снимок повреждён.", timestamp);
+        state.RecordRestoreTest(false, "Снимок повреждён.", timestamp, "abc123");
 
         Assert.Equal(timestamp, state.LastRestoreTestUtc);
         Assert.False(state.LastRestoreTestSucceeded);
+        Assert.Equal("abc123", state.LastRestoreTestSnapshotId);
         Assert.Equal("Снимок повреждён.", state.LastRestoreTestMessage);
         Assert.Equal("Проверка восстановления: Снимок повреждён.", state.RecentActivities[0].Message);
     }
@@ -119,6 +120,48 @@ public sealed class CoreTests
             if (Directory.Exists(testRoot))
                 Directory.Delete(testRoot, true);
         }
+    }
+
+    [Fact]
+    public async Task Restore_plan_counts_changes_without_writing_files()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(testRoot, "source");
+        var destination = Path.Combine(testRoot, "destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        await File.WriteAllTextAsync(Path.Combine(source, "same.txt"), "same");
+        await File.WriteAllTextAsync(Path.Combine(destination, "same.txt"), "same");
+        await File.WriteAllTextAsync(Path.Combine(source, "different.txt"), "incoming");
+        await File.WriteAllTextAsync(Path.Combine(destination, "different.txt"), "existing");
+        await File.WriteAllTextAsync(Path.Combine(source, "new.txt"), "new");
+
+        try
+        {
+            var result = await SafeMergeService.PlanDirectoryAsync(source, destination);
+
+            Assert.Equal(new MergeResult(1, 1, 1, 0), result);
+            Assert.False(File.Exists(Path.Combine(destination, "new.txt")));
+            Assert.Equal("existing", await File.ReadAllTextAsync(Path.Combine(destination, "different.txt")));
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessRunner_cancellation_stops_a_long_running_process()
+    {
+        var executable = Path.Combine(Environment.SystemDirectory, "PING.EXE");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new ProcessRunner().RunAsync(executable, ["127.0.0.1", "-n", "30"], cancellationToken: cancellation.Token));
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(12), $"Отмена заняла {stopwatch.Elapsed}.");
     }
 
     [Fact]

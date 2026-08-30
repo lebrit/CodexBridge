@@ -4,13 +4,35 @@ namespace CodexBridge.Core;
 
 public sealed class RestoreService(ResticService restic, JsonFileStore files)
 {
-    public async Task<OperationResult> RestoreSnapshotAsync(
+    public Task<OperationResult> RestoreSnapshotAsync(
         AppSettings settings,
         string repository,
         string password,
         string snapshot,
         string destinationRoot,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ProcessSnapshotAsync(settings, repository, password, snapshot, destinationRoot,
+            verify: false, apply: true, cancellationToken);
+
+    public Task<OperationResult> PlanRestoreAsync(
+        AppSettings settings,
+        string repository,
+        string password,
+        string snapshot,
+        string destinationRoot,
+        CancellationToken cancellationToken = default) =>
+        ProcessSnapshotAsync(settings, repository, password, snapshot, destinationRoot,
+            verify: true, apply: false, cancellationToken);
+
+    private async Task<OperationResult> ProcessSnapshotAsync(
+        AppSettings settings,
+        string repository,
+        string password,
+        string snapshot,
+        string destinationRoot,
+        bool verify,
+        bool apply,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(destinationRoot))
             return OperationResult.Fail("Выберите папку восстановления.");
@@ -20,17 +42,24 @@ public sealed class RestoreService(ResticService restic, JsonFileStore files)
         {
             var extract = await restic.RestoreRawAsync(
                 settings.ResticExecutable, repository, password, snapshot, staging,
-                verify: false, cancellationToken: cancellationToken);
+                verify, cancellationToken);
             if (!extract.Succeeded)
-                return extract;
+                return apply
+                    ? extract
+                    : OperationResult.Fail(
+                        "Проверка восстановления не пройдена: снимок не удалось полностью извлечь и проверить.",
+                        extract.Details);
 
             var prepared = await LoadAndValidateManifestAsync(staging, cancellationToken);
             if (!prepared.Result.Succeeded || prepared.Manifest is null)
                 return prepared.Result;
 
             var manifest = prepared.Manifest;
-            Directory.CreateDirectory(destinationRoot);
+            var fullDestinationRoot = Path.GetFullPath(destinationRoot);
+            if (apply)
+                Directory.CreateDirectory(fullDestinationRoot);
             var runName = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            var conflictRoot = Path.Combine(fullDestinationRoot, ".codexbridge-conflicts", runName);
             var total = new MergeResult(0, 0, 0, 0);
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -49,9 +78,12 @@ public sealed class RestoreService(ResticService restic, JsonFileStore files)
                 for (var index = 2; !names.Add(uniqueName); index++)
                     uniqueName = $"{name}-{index}";
 
-                var destination = Path.Combine(Path.GetFullPath(destinationRoot), uniqueName);
-                var conflicts = Path.Combine(Path.GetFullPath(destinationRoot), ".codexbridge-conflicts", runName, uniqueName);
-                total = Add(total, await SafeMergeService.MergeDirectoryAsync(source, destination, conflicts, cancellationToken));
+                var destination = Path.Combine(fullDestinationRoot, uniqueName);
+                var result = apply
+                    ? await SafeMergeService.MergeDirectoryAsync(
+                        source, destination, Path.Combine(conflictRoot, uniqueName), cancellationToken)
+                    : await SafeMergeService.PlanDirectoryAsync(source, destination, cancellationToken);
+                total = Add(total, result);
             }
 
             foreach (var item in manifest.Environment)
@@ -61,16 +93,24 @@ public sealed class RestoreService(ResticService restic, JsonFileStore files)
                     continue;
 
                 var destination = ResolveDestinationToken(item.DestinationToken);
-                var conflicts = Path.Combine(Path.GetFullPath(destinationRoot), ".codexbridge-conflicts", runName, "environment", SafeDirectoryName(item.Name));
+                var conflicts = Path.Combine(conflictRoot, "environment", SafeDirectoryName(item.Name));
                 var result = Directory.Exists(source)
-                    ? await SafeMergeService.MergeDirectoryAsync(source, destination, conflicts, cancellationToken)
-                    : await SafeMergeService.MergeFileAsync(source, destination, Path.Combine(conflicts, Path.GetFileName(destination)), cancellationToken);
+                    ? apply
+                        ? await SafeMergeService.MergeDirectoryAsync(source, destination, conflicts, cancellationToken)
+                        : await SafeMergeService.PlanDirectoryAsync(source, destination, cancellationToken)
+                    : apply
+                        ? await SafeMergeService.MergeFileAsync(
+                            source, destination, Path.Combine(conflicts, Path.GetFileName(destination)), cancellationToken)
+                        : await SafeMergeService.PlanFileAsync(source, destination, cancellationToken);
                 total = Add(total, result);
             }
 
-            return OperationResult.Ok(
-                $"Восстановление завершено: добавлено {total.Added}, совпало {total.Identical}, конфликтов {total.Conflicts}, пропущено {total.Skipped}.",
-                Path.Combine(destinationRoot, ".codexbridge-conflicts", runName));
+            var counts = $"добавлено {total.Added}, совпало {total.Identical}, конфликтов {total.Conflicts}, пропущено {total.Skipped}";
+            return apply
+                ? OperationResult.Ok($"Восстановление завершено: {counts}.", conflictRoot)
+                : OperationResult.Ok(
+                    $"Проверка и dry-run завершены: будет {counts}. Рабочие папки не изменялись.",
+                    extract.Details);
         }
         finally
         {
@@ -249,11 +289,24 @@ public sealed class RestoreService(ResticService restic, JsonFileStore files)
 
 public static class SafeMergeService
 {
-    public static async Task<MergeResult> MergeDirectoryAsync(
+    public static Task<MergeResult> PlanDirectoryAsync(
+        string sourceRoot,
+        string destinationRoot,
+        CancellationToken cancellationToken = default) =>
+        ProcessDirectoryAsync(sourceRoot, destinationRoot, null, cancellationToken);
+
+    public static Task<MergeResult> MergeDirectoryAsync(
         string sourceRoot,
         string destinationRoot,
         string conflictRoot,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ProcessDirectoryAsync(sourceRoot, destinationRoot, conflictRoot, cancellationToken);
+
+    private static async Task<MergeResult> ProcessDirectoryAsync(
+        string sourceRoot,
+        string destinationRoot,
+        string? conflictRoot,
+        CancellationToken cancellationToken)
     {
         var result = new MergeResult(0, 0, 0, 0);
         var queue = new Queue<string>();
@@ -261,6 +314,7 @@ public static class SafeMergeService
 
         while (queue.Count > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var directory = queue.Dequeue();
             if (File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint))
             {
@@ -276,8 +330,10 @@ public static class SafeMergeService
                 cancellationToken.ThrowIfCancellationRequested();
                 var relative = Path.GetRelativePath(sourceRoot, file);
                 var destination = SafeCombine(destinationRoot, relative);
-                var conflict = SafeCombine(conflictRoot, relative);
-                result = Add(result, await MergeFileAsync(file, destination, conflict, cancellationToken));
+                var fileResult = conflictRoot is null
+                    ? await PlanFileAsync(file, destination, cancellationToken)
+                    : await MergeFileAsync(file, destination, SafeCombine(conflictRoot, relative), cancellationToken);
+                result = Add(result, fileResult);
             }
         }
 
@@ -290,22 +346,33 @@ public static class SafeMergeService
         string conflictPath,
         CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(source))
-            return new MergeResult(0, 0, 0, 1);
-
-        if (!File.Exists(destination))
+        var result = await PlanFileAsync(source, destination, cancellationToken);
+        if (result.Added > 0)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(source, destination, false);
-            return new MergeResult(1, 0, 0, 0);
+        }
+        else if (result.Conflicts > 0)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(conflictPath)!);
+            File.Copy(source, conflictPath, true);
         }
 
-        if (await FilesMatchAsync(source, destination, cancellationToken))
-            return new MergeResult(0, 1, 0, 0);
+        return result;
+    }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(conflictPath)!);
-        File.Copy(source, conflictPath, true);
-        return new MergeResult(0, 0, 1, 0);
+    public static async Task<MergeResult> PlanFileAsync(
+        string source,
+        string destination,
+        CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(source))
+            return new MergeResult(0, 0, 0, 1);
+        if (!File.Exists(destination))
+            return new MergeResult(1, 0, 0, 0);
+        return await FilesMatchAsync(source, destination, cancellationToken)
+            ? new MergeResult(0, 1, 0, 0)
+            : new MergeResult(0, 0, 1, 0);
     }
 
     private static string SafeCombine(string root, string relative)

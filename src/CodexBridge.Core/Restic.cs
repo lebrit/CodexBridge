@@ -38,14 +38,56 @@ public sealed class ProcessRunner
             if (!process.Start())
                 return new ProcessResult(-1, "", $"Не удалось запустить {executable}.");
 
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!await StopProcessAsync(process))
+                    throw new InvalidOperationException("Операция отменена, но дочерний процесс не удалось остановить.");
+                throw;
+            }
+
             return new ProcessResult(process.ExitCode, await outputTask, await errorTask);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return new ProcessResult(-1, "", exception.Message);
+        }
+    }
+
+    private static async Task<bool> StopProcessAsync(Process process)
+    {
+        try
+        {
+            if (process.HasExited)
+                return true;
+            process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        try
+        {
+            return process.HasExited
+                || await Task.Run(() => process.WaitForExit(milliseconds: 5_000));
+        }
+        catch
+        {
+            return false;
         }
     }
 }
