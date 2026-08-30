@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     public ObservableCollection<ProjectEntry> Projects { get; } = [];
     public ObservableCollection<string> Roots { get; } = [];
     public ObservableCollection<SnapshotInfo> Snapshots { get; } = [];
+    public ObservableCollection<RestoreTransaction> RestoreTransactions { get; } = [];
     public ObservableCollection<string> RecentActivities { get; } = [];
 
     private enum DashboardAction
@@ -93,6 +94,7 @@ public partial class MainWindow : Window
         {
             _stateLastWriteUtc = lastWriteUtc;
             ReplaceProjects(await _catalogStore.LoadAsync());
+            await RefreshRestoreTransactionsAsync();
             await RefreshDashboardAsync();
             AppendLog("Получен результат фонового запуска.");
         }
@@ -157,6 +159,7 @@ public partial class MainWindow : Window
             VsCodeIncludeCheck.IsChecked = vsCodeAvailable && _settings.IncludeVsCode;
 
             ReplaceProjects(await _catalogStore.LoadAsync());
+            await RefreshRestoreTransactionsAsync();
             await RefreshDashboardAsync();
         });
 
@@ -622,6 +625,78 @@ public partial class MainWindow : Window
             await ShowResultAsync(await _restore.RestoreSnapshotAsync(
                 _settings, SelectedRepository(), password, snapshot.Id, DestinationText.Text, cancellationToken));
         });
+        await RefreshRestoreTransactionsAsync();
+        await RefreshDashboardAsync();
+    }
+
+    private async void RefreshRestoreTransactions_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync("Обновление журнала восстановления…", async cancellationToken =>
+            await RefreshRestoreTransactionsAsync(cancellationToken));
+        await RefreshDashboardAsync();
+    }
+
+    private async Task RefreshRestoreTransactionsAsync(CancellationToken cancellationToken = default)
+    {
+        var selectedId = (RestoreTransactionsList.SelectedItem as RestoreTransaction)?.Id;
+        var transactions = await _restore.ListTransactionsAsync(cancellationToken);
+        RestoreTransactions.Clear();
+        foreach (var transaction in transactions)
+            RestoreTransactions.Add(transaction);
+
+        RestoreTransactionsList.SelectedItem = RestoreTransactions.FirstOrDefault(item =>
+            string.Equals(item.Id, selectedId, StringComparison.Ordinal)) ?? RestoreTransactions.FirstOrDefault();
+        UpdateRestoreTransactionDetails();
+    }
+
+    private void RestoreTransactionsList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateRestoreTransactionDetails();
+
+    private void UpdateRestoreTransactionDetails()
+    {
+        if (RestoreTransactionsList.SelectedItem is not RestoreTransaction transaction)
+        {
+            RestoreTransactionTitleText.Text = "Операций пока нет";
+            RestoreTransactionDetailsText.Text = "После первого восстановления здесь появятся состояние, папка назначения и результат.";
+            RollbackTransactionButton.IsEnabled = false;
+            return;
+        }
+
+        RestoreTransactionTitleText.Text = $"{transaction.StatusDisplay}: снимок {transaction.SnapshotId}";
+        RestoreTransactionDetailsText.Text =
+            $"{transaction.StartedUtc.ToLocalTime():g} · файлов в журнале {transaction.RecordedFiles}{Environment.NewLine}" +
+            $"Папка: {transaction.DestinationRoot}{Environment.NewLine}{transaction.Message}";
+        RollbackTransactionButton.IsEnabled = transaction.CanRollback;
+    }
+
+    private async void RollbackTransaction_Click(object sender, RoutedEventArgs e)
+    {
+        if (RestoreTransactionsList.SelectedItem is not RestoreTransaction transaction || !transaction.CanRollback)
+            return;
+
+        var confirmation = MessageBox.Show(this,
+            $"Откатить восстановление снимка {transaction.SnapshotId}?\n\n" +
+            "CodexBridge удалит только созданные этой операцией файлы, SHA-256 которых не изменился. " +
+            "Изменённые после восстановления файлы останутся на месте.",
+            "Проверенный откат", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        await RunBusyAsync("Проверенный откат восстановления…", async cancellationToken =>
+            await ShowResultAsync(await _restore.RollbackAsync(transaction.Id, cancellationToken)));
+        await RefreshRestoreTransactionsAsync();
+        await RefreshDashboardAsync();
+    }
+
+    private void OpenRestoreTransactions_Click(object sender, RoutedEventArgs e)
+    {
+        Directory.CreateDirectory(AppPaths.RestoreTransactionsDirectory);
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            ArgumentList = { AppPaths.RestoreTransactionsDirectory },
+            UseShellExecute = true
+        });
     }
 
     private async void SnapshotsList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
@@ -761,8 +836,13 @@ public partial class MainWindow : Window
 
         var backupFailed = state.LastRunUtc is not null && !state.LastRunSucceeded;
         var restoreTestFailed = state.LastRestoreTestUtc is not null && !state.LastRestoreTestSucceeded;
-        AttentionCard.Visibility = backupFailed || restoreTestFailed ? Visibility.Visible : Visibility.Collapsed;
-        AttentionText.Text = backupFailed && restoreTestFailed
+        var restoreTransactionNeedsAttention = RestoreTransactions.Any(item => item.NeedsAttention);
+        AttentionCard.Visibility = backupFailed || restoreTestFailed || restoreTransactionNeedsAttention
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        AttentionText.Text = restoreTransactionNeedsAttention
+            ? "Есть незавершённое восстановление или откат. Откройте Восстановление и проверьте журнал."
+            : backupFailed && restoreTestFailed
             ? "Последний backup и проверка восстановления завершились ошибкой. Откройте Обзор и Восстановление."
             : backupFailed
                 ? "Последний backup завершился ошибкой. Откройте Обзор."

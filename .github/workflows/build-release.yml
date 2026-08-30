@@ -60,7 +60,7 @@ jobs:
 
           Code signing policy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md
 
-          This build is unsigned unless its Authenticode signature proves otherwise. After SignPath approval, signed releases will state: Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+          This build is unsigned unless both these release notes and its Authenticode signature prove otherwise. The SignPath Foundation application was not approved because the project does not yet meet the program's public-visibility requirements.
           "@
           gh release create "v$env:VERSION" $zip $hash `
             --repo "$env:GITHUB_REPOSITORY" `

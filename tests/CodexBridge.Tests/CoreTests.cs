@@ -152,6 +152,117 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public async Task Restore_transaction_survives_restart_and_rolls_back_created_files()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(testRoot, "source");
+        var destination = Path.Combine(testRoot, "destination");
+        var journals = Path.Combine(testRoot, "journals");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        await File.WriteAllTextAsync(Path.Combine(source, "new.txt"), "new");
+        await File.WriteAllTextAsync(Path.Combine(source, "different.txt"), "incoming");
+        await File.WriteAllTextAsync(Path.Combine(destination, "different.txt"), "existing");
+
+        try
+        {
+            var store = new RestoreTransactionStore(journals);
+            var transaction = await store.BeginAsync("snapshot-1", destination);
+            var result = await SafeMergeService.MergeDirectoryAsync(
+                source, destination, transaction.ConflictRoot, transaction);
+            await store.CompleteAsync(transaction, result);
+
+            var reloaded = Assert.Single(await new RestoreTransactionStore(journals).ListAsync());
+            Assert.Equal(RestoreTransactionStatus.Completed, reloaded.Status);
+            Assert.Equal(2, reloaded.RecordedFiles);
+
+            var rollback = await new RestoreTransactionStore(journals).RollbackAsync(reloaded.Id);
+
+            Assert.True(rollback.Succeeded);
+            Assert.Empty(Directory.EnumerateFiles(destination, "*.partial", SearchOption.AllDirectories));
+            Assert.False(File.Exists(Path.Combine(destination, "new.txt")));
+            Assert.Equal("existing", await File.ReadAllTextAsync(Path.Combine(destination, "different.txt")));
+            Assert.False(File.Exists(Path.Combine(transaction.ConflictRoot, "different.txt")));
+            Assert.Equal(RestoreTransactionStatus.RolledBack,
+                Assert.Single(await new RestoreTransactionStore(journals).ListAsync()).Status);
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task Restore_rollback_preserves_file_changed_after_restore()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(testRoot, "source");
+        var destination = Path.Combine(testRoot, "destination");
+        var journals = Path.Combine(testRoot, "journals");
+        Directory.CreateDirectory(source);
+        await File.WriteAllTextAsync(Path.Combine(source, "new.txt"), "restored");
+
+        try
+        {
+            var store = new RestoreTransactionStore(journals);
+            var transaction = await store.BeginAsync("snapshot-2", destination);
+            var result = await SafeMergeService.MergeDirectoryAsync(
+                source, destination, transaction.ConflictRoot, transaction);
+            await store.CompleteAsync(transaction, result);
+            await File.WriteAllTextAsync(Path.Combine(destination, "new.txt"), "edited by user");
+
+            var rollback = await store.RollbackAsync(transaction.Id);
+
+            Assert.False(rollback.Succeeded);
+            Assert.Equal("edited by user", await File.ReadAllTextAsync(Path.Combine(destination, "new.txt")));
+            Assert.Equal(RestoreTransactionStatus.RollbackBlocked,
+                Assert.Single(await store.ListAsync()).Status);
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task Restore_transaction_reports_interrupted_work_after_restart()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(testRoot, "source.txt");
+        var destinationRoot = Path.Combine(testRoot, "destination");
+        var destination = Path.Combine(destinationRoot, "source.txt");
+        var journals = Path.Combine(testRoot, "journals");
+        Directory.CreateDirectory(testRoot);
+        await File.WriteAllTextAsync(source, "restored");
+
+        try
+        {
+            var store = new RestoreTransactionStore(journals);
+            var transaction = await store.BeginAsync("snapshot-3", destinationRoot);
+            await SafeMergeService.MergeFileAsync(
+                source, destination, Path.Combine(transaction.ConflictRoot, "source.txt"), transaction);
+            var partial = $"{destination}.codexbridge-{transaction.Id}.partial";
+            File.Move(destination, partial);
+
+            var restartedStore = new RestoreTransactionStore(journals);
+            var reloaded = Assert.Single(await restartedStore.ListAsync());
+
+            Assert.True(reloaded.NeedsAttention);
+            Assert.True(reloaded.CanRollback);
+            Assert.Equal(1, reloaded.RecordedFiles);
+            Assert.True((await restartedStore.RollbackAsync(reloaded.Id)).Succeeded);
+            Assert.False(File.Exists(partial));
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, true);
+        }
+    }
+
+    [Fact]
     public async Task ProcessRunner_cancellation_stops_a_long_running_process()
     {
         var executable = Path.Combine(Environment.SystemDirectory, "PING.EXE");

@@ -171,3 +171,66 @@ public sealed record CatalogRefreshResult(
     IReadOnlyList<string> Warnings);
 
 public sealed record MergeResult(int Added, int Identical, int Conflicts, int Skipped);
+
+public enum RestoreTransactionStatus
+{
+    InProgress,
+    Completed,
+    RollbackInProgress,
+    RolledBack,
+    RollbackBlocked
+}
+
+public enum RestoreMutationKind
+{
+    AddedFile,
+    ConflictFile
+}
+
+public sealed class RestoreTransaction
+{
+    public string Id { get; set; } = "";
+    public string SnapshotId { get; set; } = "";
+    public string DestinationRoot { get; set; } = "";
+    public string ConflictRoot { get; set; } = "";
+    public DateTimeOffset StartedUtc { get; set; }
+    public DateTimeOffset UpdatedUtc { get; set; }
+    public RestoreTransactionStatus Status { get; set; } = RestoreTransactionStatus.InProgress;
+    public int RecordedFiles { get; set; }
+    public string Message { get; set; } = "";
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string JournalRoot { get; set; } = "";
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool NeedsAttention => Status is RestoreTransactionStatus.InProgress
+        or RestoreTransactionStatus.RollbackInProgress
+        or RestoreTransactionStatus.RollbackBlocked;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool CanRollback => Status is RestoreTransactionStatus.InProgress
+        or RestoreTransactionStatus.Completed
+        or RestoreTransactionStatus.RollbackInProgress
+        or RestoreTransactionStatus.RollbackBlocked;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string StatusDisplay => Status switch
+    {
+        RestoreTransactionStatus.InProgress => "не завершено",
+        RestoreTransactionStatus.Completed => "завершено",
+        RestoreTransactionStatus.RollbackInProgress => "откат не завершён",
+        RestoreTransactionStatus.RolledBack => "откачено",
+        RestoreTransactionStatus.RollbackBlocked => "откат требует внимания",
+        _ => Status.ToString()
+    };
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Display
+    {
+        get
+        {
+            var snapshot = SnapshotId.Length > 12 ? SnapshotId[..12] : SnapshotId;
+            return $"{StartedUtc.ToLocalTime():g}  •  {StatusDisplay}  •  {snapshot}  •  файлов {RecordedFiles}";
+        }
+    }
+}

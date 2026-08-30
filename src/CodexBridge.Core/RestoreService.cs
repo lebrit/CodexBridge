@@ -2,8 +2,13 @@ using System.Security.Cryptography;
 
 namespace CodexBridge.Core;
 
-public sealed class RestoreService(ResticService restic, JsonFileStore files)
+public sealed class RestoreService(
+    ResticService restic,
+    JsonFileStore files,
+    RestoreTransactionStore? transactionStore = null)
 {
+    private readonly RestoreTransactionStore transactions = transactionStore ?? new RestoreTransactionStore();
+
     public Task<OperationResult> RestoreSnapshotAsync(
         AppSettings settings,
         string repository,
@@ -38,6 +43,7 @@ public sealed class RestoreService(ResticService restic, JsonFileStore files)
             return OperationResult.Fail("Выберите папку восстановления.");
 
         var staging = Path.Combine(AppPaths.RestoreDirectory, Guid.NewGuid().ToString("N"));
+        RestoreTransaction? transaction = null;
         try
         {
             var extract = await restic.RestoreRawAsync(
@@ -57,9 +63,13 @@ public sealed class RestoreService(ResticService restic, JsonFileStore files)
             var manifest = prepared.Manifest;
             var fullDestinationRoot = Path.GetFullPath(destinationRoot);
             if (apply)
+            {
                 Directory.CreateDirectory(fullDestinationRoot);
+                transaction = await transactions.BeginAsync(snapshot, fullDestinationRoot, cancellationToken);
+            }
             var runName = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            var conflictRoot = Path.Combine(fullDestinationRoot, ".codexbridge-conflicts", runName);
+            var conflictRoot = transaction?.ConflictRoot
+                               ?? Path.Combine(fullDestinationRoot, ".codexbridge-conflicts", runName);
             var total = new MergeResult(0, 0, 0, 0);
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -81,7 +91,7 @@ public sealed class RestoreService(ResticService restic, JsonFileStore files)
                 var destination = Path.Combine(fullDestinationRoot, uniqueName);
                 var result = apply
                     ? await SafeMergeService.MergeDirectoryAsync(
-                        source, destination, Path.Combine(conflictRoot, uniqueName), cancellationToken)
+                        source, destination, Path.Combine(conflictRoot, uniqueName), transaction!, cancellationToken)
                     : await SafeMergeService.PlanDirectoryAsync(source, destination, cancellationToken);
                 total = Add(total, result);
             }
@@ -96,25 +106,71 @@ public sealed class RestoreService(ResticService restic, JsonFileStore files)
                 var conflicts = Path.Combine(conflictRoot, "environment", SafeDirectoryName(item.Name));
                 var result = Directory.Exists(source)
                     ? apply
-                        ? await SafeMergeService.MergeDirectoryAsync(source, destination, conflicts, cancellationToken)
+                        ? await SafeMergeService.MergeDirectoryAsync(
+                            source, destination, conflicts, transaction!, cancellationToken)
                         : await SafeMergeService.PlanDirectoryAsync(source, destination, cancellationToken)
                     : apply
                         ? await SafeMergeService.MergeFileAsync(
-                            source, destination, Path.Combine(conflicts, Path.GetFileName(destination)), cancellationToken)
+                            source, destination, Path.Combine(conflicts, Path.GetFileName(destination)),
+                            transaction!, cancellationToken)
                         : await SafeMergeService.PlanFileAsync(source, destination, cancellationToken);
                 total = Add(total, result);
             }
 
             var counts = $"добавлено {total.Added}, совпало {total.Identical}, конфликтов {total.Conflicts}, пропущено {total.Skipped}";
+            if (transaction is not null)
+                await transactions.CompleteAsync(transaction, total, cancellationToken);
             return apply
-                ? OperationResult.Ok($"Восстановление завершено: {counts}.", conflictRoot)
+                ? OperationResult.Ok(
+                    $"Восстановление завершено: {counts}. Журнал транзакции сохранён; доступен проверенный откат.",
+                    $"Конфликты: {conflictRoot}{Environment.NewLine}Журнал: {transactions.GetTransactionDirectory(transaction!.Id)}")
                 : OperationResult.Ok(
                     $"Проверка и dry-run завершены: будет {counts}. Рабочие папки не изменялись.",
                     extract.Details);
         }
+        catch (OperationCanceledException) when (transaction is not null)
+        {
+            var rollback = await RollbackAfterFailureAsync(transaction, "Операция отменена; выполняется автоматический откат.");
+            if (!rollback.Succeeded)
+                throw new InvalidOperationException(rollback.Message);
+            throw;
+        }
+        catch (Exception exception) when (transaction is not null)
+        {
+            var rollback = await RollbackAfterFailureAsync(
+                transaction, $"Восстановление прервано: {exception.Message}");
+            throw new InvalidOperationException($"{exception.Message} {rollback.Message}", exception);
+        }
         finally
         {
             TryDeleteStaging(staging);
+        }
+    }
+
+    public Task<IReadOnlyList<RestoreTransaction>> ListTransactionsAsync(
+        CancellationToken cancellationToken = default) =>
+        transactions.ListAsync(cancellationToken);
+
+    public Task<OperationResult> RollbackAsync(
+        string transactionId,
+        CancellationToken cancellationToken = default) =>
+        transactions.RollbackAsync(transactionId, cancellationToken);
+
+    private async Task<OperationResult> RollbackAfterFailureAsync(
+        RestoreTransaction transaction,
+        string reason)
+    {
+        try
+        {
+            await transactions.MarkInterruptedAsync(transaction, reason, CancellationToken.None);
+            return await transactions.RollbackAsync(transaction.Id, CancellationToken.None);
+        }
+        catch (Exception rollbackException)
+        {
+            ErrorLog.Write("Автоматический откат восстановления", rollbackException.Message, rollbackException.ToString());
+            return OperationResult.Fail(
+                "Автоматический откат не завершён. Откройте журнал восстановления и повторите откат.",
+                rollbackException.Message);
         }
     }
 
@@ -293,19 +349,31 @@ public static class SafeMergeService
         string sourceRoot,
         string destinationRoot,
         CancellationToken cancellationToken = default) =>
-        ProcessDirectoryAsync(sourceRoot, destinationRoot, null, cancellationToken);
+        ProcessDirectoryAsync(sourceRoot, destinationRoot, null, null, null, cancellationToken);
 
     public static Task<MergeResult> MergeDirectoryAsync(
         string sourceRoot,
         string destinationRoot,
         string conflictRoot,
         CancellationToken cancellationToken = default) =>
-        ProcessDirectoryAsync(sourceRoot, destinationRoot, conflictRoot, cancellationToken);
+        ProcessDirectoryAsync(sourceRoot, destinationRoot, conflictRoot, null, null, cancellationToken);
+
+    public static Task<MergeResult> MergeDirectoryAsync(
+        string sourceRoot,
+        string destinationRoot,
+        string conflictRoot,
+        RestoreTransaction transaction,
+        CancellationToken cancellationToken = default) =>
+        ProcessDirectoryAsync(
+            sourceRoot, destinationRoot, conflictRoot, transaction,
+            new RestoreTransactionStore(transaction.JournalRoot), cancellationToken);
 
     private static async Task<MergeResult> ProcessDirectoryAsync(
         string sourceRoot,
         string destinationRoot,
         string? conflictRoot,
+        RestoreTransaction? transaction,
+        RestoreTransactionStore? transactionStore,
         CancellationToken cancellationToken)
     {
         var result = new MergeResult(0, 0, 0, 0);
@@ -332,7 +400,11 @@ public static class SafeMergeService
                 var destination = SafeCombine(destinationRoot, relative);
                 var fileResult = conflictRoot is null
                     ? await PlanFileAsync(file, destination, cancellationToken)
-                    : await MergeFileAsync(file, destination, SafeCombine(conflictRoot, relative), cancellationToken);
+                    : transaction is null
+                        ? await MergeFileAsync(file, destination, SafeCombine(conflictRoot, relative), cancellationToken)
+                        : await MergeFileCoreAsync(
+                            file, destination, SafeCombine(conflictRoot, relative),
+                            transaction, transactionStore, cancellationToken);
                 result = Add(result, fileResult);
             }
         }
@@ -346,19 +418,59 @@ public static class SafeMergeService
         string conflictPath,
         CancellationToken cancellationToken = default)
     {
+        return await MergeFileCoreAsync(source, destination, conflictPath, null, null, cancellationToken);
+    }
+
+    public static Task<MergeResult> MergeFileAsync(
+        string source,
+        string destination,
+        string conflictPath,
+        RestoreTransaction transaction,
+        CancellationToken cancellationToken = default) =>
+        MergeFileCoreAsync(
+            source, destination, conflictPath, transaction,
+            new RestoreTransactionStore(transaction.JournalRoot), cancellationToken);
+
+    private static async Task<MergeResult> MergeFileCoreAsync(
+        string source,
+        string destination,
+        string conflictPath,
+        RestoreTransaction? transaction,
+        RestoreTransactionStore? transactionStore,
+        CancellationToken cancellationToken)
+    {
         var result = await PlanFileAsync(source, destination, cancellationToken);
         if (result.Added > 0)
         {
+            if (transaction is not null)
+                await transactionStore!.RecordWriteIntentAsync(
+                    transaction, RestoreMutationKind.AddedFile, source, destination, cancellationToken);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(source, destination, false);
+            CopyFile(source, destination, transaction);
         }
         else if (result.Conflicts > 0)
         {
+            if (transaction is not null)
+                await transactionStore!.RecordWriteIntentAsync(
+                    transaction, RestoreMutationKind.ConflictFile, source, conflictPath, cancellationToken);
             Directory.CreateDirectory(Path.GetDirectoryName(conflictPath)!);
-            File.Copy(source, conflictPath, true);
+            CopyFile(source, conflictPath, transaction);
         }
 
         return result;
+    }
+
+    private static void CopyFile(string source, string target, RestoreTransaction? transaction)
+    {
+        if (transaction is null)
+        {
+            File.Copy(source, target, false);
+            return;
+        }
+
+        var partial = RestoreTransactionStore.GetPartialPath(target, transaction.Id);
+        File.Copy(source, partial, false);
+        File.Move(partial, target, false);
     }
 
     public static async Task<MergeResult> PlanFileAsync(
