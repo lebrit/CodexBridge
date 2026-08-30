@@ -5,6 +5,23 @@ namespace CodexBridge.Tests;
 public sealed class CoreTests
 {
     [Fact]
+    public void ProjectCatalogFilter_matches_name_path_and_status()
+    {
+        var project = new ProjectEntry
+        {
+            Name = "МФЦ",
+            Path = @"C:\Projects\mfc-service",
+            IsProtected = true,
+            Status = ProjectStatus.Protected
+        };
+
+        Assert.True(ProjectCatalogFilter.Matches(project, "мфц", ProjectListFilter.All));
+        Assert.True(ProjectCatalogFilter.Matches(project, "MFC-SERVICE", ProjectListFilter.Protected));
+        Assert.False(ProjectCatalogFilter.Matches(project, "МФЦ", ProjectListFilter.Excluded));
+        Assert.False(ProjectCatalogFilter.Matches(project, "другой", ProjectListFilter.All));
+    }
+
+    [Fact]
     public void RecordActivity_keeps_the_ten_newest_entries()
     {
         var state = new BackupState();

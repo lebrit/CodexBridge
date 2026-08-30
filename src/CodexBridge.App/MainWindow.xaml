@@ -130,22 +130,59 @@
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <WrapPanel Margin="0,0,0,12">
+
+                        <Border Style="{StaticResource PanelCard}" Padding="14" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="220"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Margin="0,0,12,0">
+                                    <TextBlock Text="Поиск по названию или пути" FontWeight="SemiBold"/>
+                                    <TextBox x:Name="ProjectSearchText" TextChanged="ProjectFilter_Changed"
+                                             AutomationProperties.Name="Поиск проектов"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                                    <TextBlock Text="Состояние" FontWeight="SemiBold"/>
+                                    <ComboBox x:Name="ProjectStatusFilter" SelectedIndex="0" SelectionChanged="ProjectFilter_Changed"
+                                              AutomationProperties.Name="Фильтр состояния проектов">
+                                        <ComboBoxItem Content="Все проекты" Tag="All"/>
+                                        <ComboBoxItem Content="Защищённые" Tag="Protected"/>
+                                        <ComboBoxItem Content="Исключённые" Tag="Excluded"/>
+                                        <ComboBoxItem Content="Папка не найдена" Tag="Missing"/>
+                                        <ComboBoxItem Content="Требуют внимания" Tag="NeedsAttention"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <Button Grid.Column="2" Content="Сбросить" VerticalAlignment="Bottom" Margin="0,0,0,10"
+                                        Click="ClearProjectFilter_Click"/>
+                            </Grid>
+                        </Border>
+
+                        <WrapPanel Grid.Row="1" Margin="0,0,0,8">
                             <Button Style="{StaticResource PrimaryButton}" Content="Сканировать" Click="RefreshProjects_Click"/>
                             <Button Content="Сохранить выбор" Click="SaveProjects_Click"/>
+                            <Button Content="Открыть папку" Click="OpenSelectedProject_Click"/>
+                            <Button Content="Защищать показанные" Click="ProtectVisibleProjects_Click"/>
+                            <Button Content="Исключить показанные" Click="ExcludeVisibleProjects_Click"/>
                         </WrapPanel>
-                        <DataGrid Grid.Row="1" ItemsSource="{Binding Projects}" AutoGenerateColumns="False" CanUserAddRows="False"
-                                  IsReadOnly="False" SelectionMode="Single" AlternationCount="2">
+                        <DataGrid x:Name="ProjectsGrid" Grid.Row="2" ItemsSource="{Binding Projects}" AutoGenerateColumns="False"
+                                  CanUserAddRows="False" IsReadOnly="False" SelectionMode="Single" AlternationCount="2"
+                                  MouseDoubleClick="ProjectsGrid_MouseDoubleClick" AutomationProperties.Name="Список проектов">
                             <DataGrid.Columns>
                                 <DataGridCheckBoxColumn Header="Защищать" Binding="{Binding IsProtected, Mode=TwoWay}" Width="90"/>
                                 <DataGridTextColumn Header="Название" Binding="{Binding Name}" IsReadOnly="True" Width="180"/>
                                 <DataGridTextColumn Header="Путь" Binding="{Binding Path}" IsReadOnly="True" Width="*"/>
                                 <DataGridCheckBoxColumn Header="Git" Binding="{Binding IsGit}" IsReadOnly="True" Width="60"/>
-                                <DataGridTextColumn Header="Состояние" Binding="{Binding Status}" IsReadOnly="True" Width="130"/>
+                                <DataGridTextColumn Header="Состояние" Binding="{Binding StatusDisplay}" IsReadOnly="True" Width="150"/>
                             </DataGrid.Columns>
                         </DataGrid>
+                        <TextBlock x:Name="ProjectListSummaryText" Grid.Row="3" Foreground="{DynamicResource TextMuted}"
+                                   Margin="0,9,0,0" Text="Показано 0 проектов"/>
                     </Grid>
                 </TabItem>
 
@@ -205,6 +242,22 @@
                 <TabItem>
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,20,0">
+                                        <TextBlock Text="Основные настройки" FontSize="19" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Выберите, где искать проекты и где хранить основную зашифрованную копию."
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Style="{StaticResource PrimaryButton}" Content="Сохранить настройки"
+                                            Click="SaveSettings_Click" VerticalAlignment="Center" Margin="0"/>
+                                </Grid>
+                            </Border>
+
                             <GroupBox Header="Корни проектов">
                                 <StackPanel>
                                     <ListBox x:Name="RootsList" ItemsSource="{Binding Roots}" Height="120"/>
@@ -228,53 +281,65 @@
                                     <TextBlock Text="Ключ восстановления"/>
                                     <PasswordBox x:Name="PasswordInput"/>
                                     <WrapPanel>
-                                        <Button Style="{StaticResource PrimaryButton}" Content="Сохранить настройки" Click="SaveSettings_Click"/>
-                                        <Button Content="Создать/подключить хранилище" Click="InitializeLocal_Click"/>
+                                        <Button Style="{StaticResource PrimaryButton}" Content="Создать/подключить хранилище" Click="InitializeLocal_Click"/>
                                     </WrapPanel>
                                 </StackPanel>
                             </GroupBox>
 
-                            <GroupBox Header="Облачная копия">
-                                <StackPanel>
-                                    <CheckBox x:Name="CloudEnabledCheck" Content="Включить облачный бэкап после локального" Margin="0,0,0,10"/>
-                                    <TextBlock Text="Имя rclone remote"/>
-                                    <DockPanel>
-                                        <Button DockPanel.Dock="Right" Content="Подставить адрес" Click="UseRcloneRemote_Click"/>
-                                        <TextBox x:Name="RcloneRemoteNameText"/>
-                                    </DockPanel>
-                                    <WrapPanel>
-                                        <Button Content="Открыть мастер rclone" Click="ConfigureRclone_Click"/>
-                                        <Button Content="Найти настроенные remotes" Click="DetectRcloneRemotes_Click"/>
-                                    </WrapPanel>
-                                    <TextBlock Text="Restic/rclone адрес, например rclone:my-remote:CodexBridge/restic-v1"/>
-                                    <TextBox x:Name="CloudRepositoryText"/>
-                                    <Button Content="Создать/подключить облачное хранилище" HorizontalAlignment="Left" Click="InitializeCloud_Click"/>
-                                </StackPanel>
-                            </GroupBox>
+                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                                <Expander x:Name="AdvancedSettingsExpander" Header="Расширенные настройки" FontSize="17" FontWeight="SemiBold"
+                                          AutomationProperties.Name="Расширенные настройки">
+                                    <StackPanel Margin="0,14,0,0" TextElement.FontSize="14" TextElement.FontWeight="Normal">
+                                        <TextBlock Text="Облако, сроки хранения снимков и системные инструменты можно настроить при необходимости."
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
-                            <GroupBox Header="Хранение снимков">
-                                <StackPanel>
-                                    <CheckBox x:Name="RetentionEnabledCheck" Content="Автоматически удалять лишние старые снимки после успешного backup" Margin="0,0,0,10"/>
-                                    <WrapPanel>
-                                        <TextBlock Text="Дней" VerticalAlignment="Center" Margin="0,0,6,8"/>
-                                        <TextBox x:Name="KeepDailyText" Width="55"/>
-                                        <TextBlock Text="Недель" VerticalAlignment="Center" Margin="12,0,6,8"/>
-                                        <TextBox x:Name="KeepWeeklyText" Width="55"/>
-                                        <TextBlock Text="Месяцев" VerticalAlignment="Center" Margin="12,0,6,8"/>
-                                        <TextBox x:Name="KeepMonthlyText" Width="55"/>
-                                    </WrapPanel>
-                                    <TextBlock Text="По умолчанию функция выключена. При включении restic оставляет 7 дневных, 4 недельных и 6 месячных снимков."
-                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
-                                </StackPanel>
-                            </GroupBox>
+                                        <GroupBox Header="Облачная копия">
+                                            <StackPanel>
+                                                <CheckBox x:Name="CloudEnabledCheck" Content="Включить облачный бэкап после локального" Margin="0,0,0,10"/>
+                                                <TextBlock Text="Имя rclone remote"/>
+                                                <DockPanel>
+                                                    <Button DockPanel.Dock="Right" Content="Подставить адрес" Click="UseRcloneRemote_Click"/>
+                                                    <TextBox x:Name="RcloneRemoteNameText"/>
+                                                </DockPanel>
+                                                <WrapPanel>
+                                                    <Button Content="Открыть мастер rclone" Click="ConfigureRclone_Click"/>
+                                                    <Button Content="Найти настроенные remotes" Click="DetectRcloneRemotes_Click"/>
+                                                </WrapPanel>
+                                                <TextBlock Text="Restic/rclone адрес, например rclone:my-remote:CodexBridge/restic-v1"/>
+                                                <TextBox x:Name="CloudRepositoryText"/>
+                                                <Button Content="Создать/подключить облачное хранилище" HorizontalAlignment="Left" Click="InitializeCloud_Click"/>
+                                            </StackPanel>
+                                        </GroupBox>
 
-                            <GroupBox Header="Автоматизация">
-                                <WrapPanel>
-                                    <Button Content="Установить restic и rclone" Click="InstallTools_Click"/>
-                                    <Button Style="{StaticResource PrimaryButton}" Content="Включить ежечасный бэкап" Click="InstallScheduler_Click"/>
-                                    <Button Content="Отключить автобэкап" Click="RemoveScheduler_Click"/>
-                                </WrapPanel>
-                            </GroupBox>
+                                        <GroupBox Header="Хранение снимков">
+                                            <StackPanel>
+                                                <CheckBox x:Name="RetentionEnabledCheck" Content="Автоматически удалять лишние старые снимки после успешного backup" Margin="0,0,0,10"/>
+                                                <WrapPanel>
+                                                    <TextBlock Text="Дней" VerticalAlignment="Center" Margin="0,0,6,8"/>
+                                                    <TextBox x:Name="KeepDailyText" Width="55"/>
+                                                    <TextBlock Text="Недель" VerticalAlignment="Center" Margin="12,0,6,8"/>
+                                                    <TextBox x:Name="KeepWeeklyText" Width="55"/>
+                                                    <TextBlock Text="Месяцев" VerticalAlignment="Center" Margin="12,0,6,8"/>
+                                                    <TextBox x:Name="KeepMonthlyText" Width="55"/>
+                                                </WrapPanel>
+                                                <TextBlock Text="По умолчанию функция выключена. При включении restic оставляет 7 дневных, 4 недельных и 6 месячных снимков."
+                                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                                            </StackPanel>
+                                        </GroupBox>
+
+                                        <GroupBox Header="Автоматизация">
+                                            <WrapPanel>
+                                                <Button Content="Установить restic и rclone" Click="InstallTools_Click"/>
+                                                <Button Style="{StaticResource PrimaryButton}" Content="Включить ежечасный бэкап" Click="InstallScheduler_Click"/>
+                                                <Button Content="Отключить автобэкап" Click="RemoveScheduler_Click"/>
+                                            </WrapPanel>
+                                        </GroupBox>
+
+                                        <Button Style="{StaticResource PrimaryButton}" Content="Сохранить все настройки"
+                                                HorizontalAlignment="Left" Click="SaveSettings_Click"/>
+                                    </StackPanel>
+                                </Expander>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

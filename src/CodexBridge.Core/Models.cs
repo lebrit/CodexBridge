@@ -21,6 +21,15 @@ public sealed class ProjectEntry
     public ProjectStatus Status { get; set; } = ProjectStatus.Protected;
     public DateTimeOffset FirstSeenUtc { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset LastSeenUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    [JsonIgnore]
+    public string StatusDisplay => Status switch
+    {
+        ProjectStatus.Protected => "Защищён",
+        ProjectStatus.Excluded => "Исключён",
+        ProjectStatus.Missing => "Папка не найдена",
+        _ => "Требует внимания"
+    };
 }
 
 public sealed class AppSettings

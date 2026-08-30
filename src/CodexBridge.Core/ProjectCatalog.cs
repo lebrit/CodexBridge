@@ -1,5 +1,36 @@
 namespace CodexBridge.Core;
 
+public enum ProjectListFilter
+{
+    All,
+    Protected,
+    Excluded,
+    Missing,
+    NeedsAttention
+}
+
+public static class ProjectCatalogFilter
+{
+    public static bool Matches(ProjectEntry project, string? query, ProjectListFilter filter)
+    {
+        var normalizedQuery = query?.Trim() ?? "";
+        var matchesText = normalizedQuery.Length == 0
+                          || project.Name.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                          || project.Path.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase);
+        if (!matchesText)
+            return false;
+
+        return filter switch
+        {
+            ProjectListFilter.Protected => project.IsProtected && project.Status == ProjectStatus.Protected,
+            ProjectListFilter.Excluded => !project.IsProtected || project.Status == ProjectStatus.Excluded,
+            ProjectListFilter.Missing => project.Status == ProjectStatus.Missing,
+            ProjectListFilter.NeedsAttention => project.Status == ProjectStatus.NeedsAttention,
+            _ => true
+        };
+    }
+}
+
 public sealed class ProjectDiscoveryService(CatalogStore catalog)
 {
     private static readonly HashSet<string> IgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)

@@ -1,9 +1,12 @@
+using System.ComponentModel;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using CodexBridge.Core;
 using Microsoft.Win32;
@@ -24,6 +27,7 @@ public partial class MainWindow : Window
     private readonly BackupToolInstaller _toolInstaller;
     private readonly ToolInventoryService _toolInventory;
     private readonly RestoreService _restore;
+    private ICollectionView? _projectsView;
     private AppSettings _settings = new();
     private DashboardAction _dashboardAction = DashboardAction.OpenSetup;
 
@@ -46,6 +50,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = this;
+        _projectsView = CollectionViewSource.GetDefaultView(Projects);
+        _projectsView.Filter = ProjectMatchesFilter;
 
         _settingsStore = new SettingsStore(_files);
         _catalogStore = new CatalogStore(_files);
@@ -214,8 +220,82 @@ public partial class MainWindow : Window
                 ? ProjectStatus.Missing
                 : project.IsProtected ? ProjectStatus.Protected : ProjectStatus.Excluded;
         await _discovery.SaveAsync(Projects);
+        _projectsView?.Refresh();
+        UpdateProjectListSummary();
         AppendLog("Выбор защищаемых проектов сохранён.");
         await RefreshDashboardAsync();
+    }
+
+    private void ProjectFilter_Changed(object sender, RoutedEventArgs e)
+    {
+        _projectsView?.Refresh();
+        UpdateProjectListSummary();
+    }
+
+    private bool ProjectMatchesFilter(object item)
+    {
+        if (item is not ProjectEntry project)
+            return false;
+
+        var filter = ProjectListFilter.All;
+        if (ProjectStatusFilter?.SelectedItem is ComboBoxItem { Tag: string tag })
+            Enum.TryParse(tag, out filter);
+        return ProjectCatalogFilter.Matches(project, ProjectSearchText?.Text, filter);
+    }
+
+    private void ClearProjectFilter_Click(object sender, RoutedEventArgs e)
+    {
+        ProjectSearchText.Clear();
+        ProjectStatusFilter.SelectedIndex = 0;
+        _projectsView?.Refresh();
+        UpdateProjectListSummary();
+    }
+
+    private void ProtectVisibleProjects_Click(object sender, RoutedEventArgs e) => SetVisibleProjectsProtection(true);
+
+    private void ExcludeVisibleProjects_Click(object sender, RoutedEventArgs e) => SetVisibleProjectsProtection(false);
+
+    private void SetVisibleProjectsProtection(bool protect)
+    {
+        var visibleProjects = _projectsView?.Cast<ProjectEntry>().ToList() ?? [];
+        foreach (var project in visibleProjects)
+        {
+            project.IsProtected = protect;
+            if (project.Status != ProjectStatus.Missing)
+                project.Status = protect ? ProjectStatus.Protected : ProjectStatus.Excluded;
+        }
+
+        _projectsView?.Refresh();
+        ProjectsGrid.Items.Refresh();
+        UpdateProjectListSummary();
+        AppendLog($"{(protect ? "Включена защита" : "Исключены")} показанных проектов: {visibleProjects.Count}. Сохраните выбор.");
+    }
+
+    private void OpenSelectedProject_Click(object sender, RoutedEventArgs e) => OpenSelectedProject();
+
+    private void ProjectsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e) => OpenSelectedProject();
+
+    private void OpenSelectedProject()
+    {
+        if (ProjectsGrid.SelectedItem is not ProjectEntry project)
+        {
+            MessageBox.Show(this, "Выберите проект в списке.", "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!Directory.Exists(project.Path))
+        {
+            MessageBox.Show(this, "Папка проекта сейчас недоступна.", "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo { FileName = project.Path, UseShellExecute = true });
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "Не удалось открыть папку", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private async void SaveSettings_Click(object sender, RoutedEventArgs e)
@@ -512,6 +592,18 @@ public partial class MainWindow : Window
         Projects.Clear();
         foreach (var project in projects)
             Projects.Add(project);
+        _projectsView?.Refresh();
+        UpdateProjectListSummary();
+    }
+
+    private void UpdateProjectListSummary()
+    {
+        if (ProjectListSummaryText is null)
+            return;
+
+        var visibleCount = _projectsView?.Cast<object>().Count() ?? Projects.Count;
+        var protectedCount = Projects.Count(project => project.IsProtected && project.Status != ProjectStatus.Missing);
+        ProjectListSummaryText.Text = $"Показано {visibleCount} из {Projects.Count} · защищено {protectedCount}";
     }
 
     private async Task RefreshDashboardAsync()
