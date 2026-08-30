@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using CodexBridge.Core;
 using Microsoft.Win32;
 
@@ -27,9 +28,12 @@ public partial class MainWindow : Window
     private readonly BackupToolInstaller _toolInstaller;
     private readonly ToolInventoryService _toolInventory;
     private readonly RestoreService _restore;
+    private readonly DispatcherTimer _stateRefreshTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private ICollectionView? _projectsView;
     private AppSettings _settings = new();
     private DashboardAction _dashboardAction = DashboardAction.OpenSetup;
+    private DateTime _stateLastWriteUtc;
+    private bool _externalRefreshRunning;
 
     public ObservableCollection<ProjectEntry> Projects { get; } = [];
     public ObservableCollection<string> Roots { get; } = [];
@@ -64,7 +68,59 @@ public partial class MainWindow : Window
         _restore = new RestoreService(_restic, _files);
 
         VersionText.Text = "Версия " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev");
-        Loaded += async (_, _) => await LoadAsync();
+        Loaded += async (_, _) =>
+        {
+            await LoadAsync();
+            _stateLastWriteUtc = GetStateLastWriteUtc();
+            _stateRefreshTimer.Start();
+        };
+        _stateRefreshTimer.Tick += StateRefreshTimer_Tick;
+        Closed += (_, _) => _stateRefreshTimer.Stop();
+    }
+
+    private async void StateRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_externalRefreshRunning || BusyPanel.Visibility == Visibility.Visible)
+            return;
+
+        var lastWriteUtc = GetStateLastWriteUtc();
+        if (lastWriteUtc <= _stateLastWriteUtc)
+            return;
+
+        _externalRefreshRunning = true;
+        try
+        {
+            _stateLastWriteUtc = lastWriteUtc;
+            ReplaceProjects(await _catalogStore.LoadAsync());
+            await RefreshDashboardAsync();
+            AppendLog("Получен результат фонового запуска.");
+        }
+        catch (Exception exception)
+        {
+            ErrorLog.Write("Обновление состояния фонового агента", exception.Message, exception.ToString());
+        }
+        finally
+        {
+            _externalRefreshRunning = false;
+        }
+    }
+
+    private static DateTime GetStateLastWriteUtc()
+    {
+        try
+        {
+            return File.Exists(AppPaths.StateFile)
+                ? File.GetLastWriteTimeUtc(AppPaths.StateFile)
+                : DateTime.MinValue;
+        }
+        catch (IOException)
+        {
+            return DateTime.MinValue;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return DateTime.MinValue;
+        }
     }
 
     private async Task LoadAsync()
@@ -331,10 +387,10 @@ public partial class MainWindow : Window
         {
             await SaveSettingsCoreAsync();
             SavePasswordIfEntered();
-            var discovery = await _discovery.RefreshAsync(_settings);
-            ReplaceProjects(discovery.Projects);
             var coordinator = new BackupCoordinator(_settingsStore, _catalogStore, _stateStore, _files, _secrets, _restic);
-            await ShowResultAsync(await coordinator.RunAsync(), recordActivity: false);
+            var result = await coordinator.RunAsync();
+            ReplaceProjects(await _catalogStore.LoadAsync());
+            await ShowResultAsync(result, recordActivity: false);
             await RefreshDashboardAsync();
         });
     }
@@ -392,6 +448,12 @@ public partial class MainWindow : Window
     private async void RemoveScheduler_Click(object sender, RoutedEventArgs e)
     {
         await ShowResultAsync(await _scheduler.RemoveAsync(_settings.ScheduledTaskName));
+        await RefreshDashboardAsync();
+    }
+
+    private async void RunScheduledBackup_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowResultAsync(await _scheduler.RunNowAsync(_settings.ScheduledTaskName), recordActivity: false);
         await RefreshDashboardAsync();
     }
 
@@ -640,11 +702,18 @@ public partial class MainWindow : Window
             RecentActivities.Add($"{marker}  {activity.RecordedUtc.ToLocalTime():g} — {activity.Message}");
         }
 
-        var taskInstalled = await _scheduler.ExistsAsync(_settings.ScheduledTaskName);
+        var agentExecutable = Path.Combine(AppContext.BaseDirectory, "CodexBridge.Agent.exe");
+        var taskStatus = await _scheduler.GetStatusAsync(_settings.ScheduledTaskName, agentExecutable);
         var resticAvailable = (await _restic.VersionAsync(_settings.ResticExecutable)).Succeeded;
-        AutomationStatusText.Text = taskInstalled
-            ? "Автокопирование: каждый час"
-            : "Автокопирование выключено";
+        var lastRun = state.LastRunUtc is null
+            ? "запусков ещё не было"
+            : $"последний запуск {FormatRelativeTime(state.LastRunUtc, "")}, " +
+              (state.LastRunSource == BackupRunSource.Automatic ? "автоматически" : "вручную");
+        AutomationStatusText.Text = !taskStatus.Installed
+            ? "Автокопирование выключено"
+            : taskStatus.UsesCurrentAgent
+                ? $"Автокопирование: каждый час · {lastRun}"
+                : "Автокопирование требует обновления после смены версии программы";
 
         if (!resticAvailable)
             SetDashboardStatus("Нужны инструменты резервного копирования",
@@ -678,14 +747,19 @@ public partial class MainWindow : Window
             SetDashboardStatus("Резервная копия требует внимания",
                 state.LastMessage,
                 "Повторить копирование", DashboardAction.BackupNow, "StatusDanger", "!");
-        else if (!taskInstalled)
-            SetDashboardStatus("Проекты защищены вручную",
-                "Последняя копия успешна, но автоматическое расписание пока выключено.",
-                "Включить автобэкап", DashboardAction.EnableScheduler, "StatusWarning", "!");
+        else if (!taskStatus.Installed || !taskStatus.UsesCurrentAgent)
+            SetDashboardStatus(taskStatus.Installed ? "Обновите автоматическое расписание" : "Проекты защищены вручную",
+                taskStatus.Installed
+                    ? "Расписание указывает на предыдущую папку программы. Обновите его одним нажатием."
+                    : "Последняя копия успешна, но автоматическое расписание пока выключено.",
+                taskStatus.Installed ? "Обновить автобэкап" : "Включить автобэкап",
+                DashboardAction.EnableScheduler, "StatusWarning", "!");
         else
             SetDashboardStatus("Всё защищено",
                 "Последняя копия успешна, проекты доступны, автоматическое расписание работает.",
                 "Создать копию сейчас", DashboardAction.BackupNow, "StatusGood", "✓");
+
+        _stateLastWriteUtc = GetStateLastWriteUtc();
     }
 
     private void SetDashboardStatus(

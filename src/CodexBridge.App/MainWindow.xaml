@@ -97,6 +97,7 @@
                                         <Button Content="Проверить хранилище" Click="CheckRepository_Click"/>
                                         <Button Content="Глубокая проверка 5%" Click="DeepCheckRepository_Click"/>
                                         <Button Content="Включить автобэкап" Click="InstallScheduler_Click"/>
+                                        <Button Content="Запустить автобэкап сейчас" Click="RunScheduledBackup_Click"/>
                                     </WrapPanel>
                                 </StackPanel>
                             </Border>
@@ -331,6 +332,7 @@
                                             <WrapPanel>
                                                 <Button Content="Установить restic и rclone" Click="InstallTools_Click"/>
                                                 <Button Style="{StaticResource PrimaryButton}" Content="Включить ежечасный бэкап" Click="InstallScheduler_Click"/>
+                                                <Button Content="Запустить сейчас" Click="RunScheduledBackup_Click"/>
                                                 <Button Content="Отключить автобэкап" Click="RemoveScheduler_Click"/>
                                             </WrapPanel>
                                         </GroupBox>

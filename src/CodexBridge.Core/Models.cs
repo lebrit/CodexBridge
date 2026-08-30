@@ -11,6 +11,12 @@ public enum ProjectStatus
     NeedsAttention
 }
 
+public enum BackupRunSource
+{
+    Manual,
+    Automatic
+}
+
 public sealed class ProjectEntry
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -57,6 +63,8 @@ public sealed class BackupState
     public DateTimeOffset? LastLocalBackupUtc { get; set; }
     public DateTimeOffset? LastCloudBackupUtc { get; set; }
     public DateTimeOffset? LastCheckUtc { get; set; }
+    public DateTimeOffset? LastRunUtc { get; set; }
+    public BackupRunSource LastRunSource { get; set; }
     public bool LastRunSucceeded { get; set; }
     public string LastMessage { get; set; } = "Настройка ещё не завершена.";
     public List<ActivityEntry> RecentActivities { get; set; } = [];
@@ -75,6 +83,17 @@ public sealed class BackupState
         });
         if (RecentActivities.Count > 10)
             RecentActivities.RemoveRange(10, RecentActivities.Count - 10);
+    }
+
+    public void RecordRun(bool succeeded, string message, BackupRunSource source, DateTimeOffset? recordedUtc = null)
+    {
+        var timestamp = recordedUtc ?? DateTimeOffset.UtcNow;
+        LastRunUtc = timestamp;
+        LastRunSource = source;
+        LastRunSucceeded = succeeded;
+        LastMessage = message.Trim();
+        var prefix = source == BackupRunSource.Automatic ? "Автоматически" : "Вручную";
+        RecordActivity(succeeded, $"{prefix}: {LastMessage}", timestamp);
     }
 }
 
@@ -115,6 +134,8 @@ public sealed record OperationResult(bool Succeeded, string Message, string Deta
     public static OperationResult Ok(string message, string details = "") => new(true, message, details);
     public static OperationResult Fail(string message, string details = "") => new(false, message, details);
 }
+
+public sealed record ScheduledTaskStatus(bool Installed, bool UsesCurrentAgent, string ConfiguredAgent = "");
 
 public sealed record SnapshotInfo(
     string Id,

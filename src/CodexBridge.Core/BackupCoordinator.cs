@@ -10,7 +10,9 @@ public sealed class BackupCoordinator(
     DpapiSecretStore secrets,
     ResticService restic)
 {
-    public async Task<OperationResult> RunAsync(CancellationToken cancellationToken = default)
+    public async Task<OperationResult> RunAsync(
+        BackupRunSource runSource = BackupRunSource.Manual,
+        CancellationToken cancellationToken = default)
     {
         FileStream backupLock;
         try
@@ -26,18 +28,19 @@ public sealed class BackupCoordinator(
         using (backupLock)
         {
             var settings = await settingsStore.LoadAsync(cancellationToken);
-            var projects = await catalogStore.LoadAsync(cancellationToken);
+            var discovery = await new ProjectDiscoveryService(catalogStore).RefreshAsync(settings, cancellationToken);
+            var projects = discovery.Projects;
             var password = secrets.Load();
             if (string.IsNullOrWhiteSpace(password))
-                return await FinishAsync(false, "Сначала сохраните ключ резервной копии.", cancellationToken);
+                return await FinishAsync(false, "Сначала сохраните ключ резервной копии.", runSource, cancellationToken);
             if (string.IsNullOrWhiteSpace(settings.LocalRepository))
-                return await FinishAsync(false, "Не настроен локальный репозиторий.", cancellationToken);
+                return await FinishAsync(false, "Не настроен локальный репозиторий.", runSource, cancellationToken);
 
             var protectedProjects = projects
                 .Where(project => project.IsProtected && project.Status != ProjectStatus.Missing && Directory.Exists(project.Path))
                 .ToList();
             if (protectedProjects.Count == 0)
-                return await FinishAsync(false, "Не найдено защищённых проектов.", cancellationToken);
+                return await FinishAsync(false, "Не найдено защищённых проектов.", runSource, cancellationToken);
 
             var includeVsCode = settings.IncludeVsCode && ToolInventoryService.FindVsCodeExecutable() is not null;
             await new ToolInventoryService(new ProcessRunner()).CaptureAsync(includeVsCode, cancellationToken);
@@ -62,7 +65,7 @@ public sealed class BackupCoordinator(
 
             var projectPaths = PathPolicy.ReduceNestedRoots(protectedProjects.Select(project => project.Path));
             if (projectPaths.Any(path => PathPolicy.IsInside(settings.LocalRepository, path)))
-                return await FinishAsync(false, "Локальный backup находится внутри защищаемого проекта. Выберите другой каталог.", cancellationToken);
+                return await FinishAsync(false, "Локальный backup находится внутри защищаемого проекта. Выберите другой каталог.", runSource, cancellationToken);
 
             var localConfig = Path.Combine(Path.GetFullPath(settings.LocalRepository), "config");
             if (!File.Exists(localConfig))
@@ -70,7 +73,7 @@ public sealed class BackupCoordinator(
                 var initialization = await restic.InitializeAsync(
                     settings.ResticExecutable, settings.LocalRepository, password, cancellationToken);
                 if (!initialization.Succeeded)
-                    return await FinishAsync(false, initialization.Message, cancellationToken, initialization.Details);
+                    return await FinishAsync(false, initialization.Message, runSource, cancellationToken, initialization.Details);
             }
 
             var sources = projectPaths
@@ -82,7 +85,7 @@ public sealed class BackupCoordinator(
 
             var local = await restic.BackupAsync(settings.ResticExecutable, settings.LocalRepository, password, sources, cancellationToken);
             if (!local.Succeeded)
-                return await FinishAsync(false, local.Message, cancellationToken, local.Details);
+                return await FinishAsync(false, local.Message, runSource, cancellationToken, local.Details);
 
             var state = await stateStore.LoadAsync(cancellationToken);
             state.LastLocalBackupUtc = DateTimeOffset.UtcNow;
@@ -93,9 +96,7 @@ public sealed class BackupCoordinator(
                 var cloud = await restic.BackupAsync(settings.ResticExecutable, settings.CloudRepository, password, sources, cancellationToken);
                 if (!cloud.Succeeded)
                 {
-                    state.LastRunSucceeded = false;
-                    state.LastMessage = "Локальная копия готова, облачная ожидает повтора: " + cloud.Message;
-                    state.RecordActivity(false, state.LastMessage);
+                    state.RecordRun(false, "Локальная копия готова, облачная ожидает повтора: " + cloud.Message, runSource);
                     await stateStore.SaveAsync(state, cancellationToken);
                     return OperationResult.Fail(state.LastMessage, cloud.Details);
                 }
@@ -122,17 +123,15 @@ public sealed class BackupCoordinator(
 
                 if (failures.Count > 0)
                 {
-                    state.LastRunSucceeded = false;
-                    state.LastMessage = "Новые копии готовы, но очистка старых снимков требует внимания.";
-                    state.RecordActivity(false, state.LastMessage);
+                    state.RecordRun(false, "Новые копии готовы, но очистка старых снимков требует внимания.", runSource);
                     await stateStore.SaveAsync(state, cancellationToken);
                     return OperationResult.Fail(state.LastMessage, string.Join(Environment.NewLine, failures));
                 }
             }
 
-            state.LastRunSucceeded = true;
-            state.LastMessage = settings.CloudEnabled ? "Локальная и облачная копии готовы." : "Локальная копия готова.";
-            state.RecordActivity(true, state.LastMessage);
+            state.RecordRun(true,
+                settings.CloudEnabled ? "Локальная и облачная копии готовы." : "Локальная копия готова.",
+                runSource);
             await stateStore.SaveAsync(state, cancellationToken);
             return OperationResult.Ok(state.LastMessage, local.Details);
         }
@@ -141,13 +140,12 @@ public sealed class BackupCoordinator(
     private async Task<OperationResult> FinishAsync(
         bool success,
         string message,
+        BackupRunSource runSource,
         CancellationToken cancellationToken,
         string details = "")
     {
         var state = await stateStore.LoadAsync(cancellationToken);
-        state.LastRunSucceeded = success;
-        state.LastMessage = message;
-        state.RecordActivity(success, message);
+        state.RecordRun(success, message, runSource);
         await stateStore.SaveAsync(state, cancellationToken);
         return success ? OperationResult.Ok(message, details) : OperationResult.Fail(message, details);
     }

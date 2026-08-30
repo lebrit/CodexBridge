@@ -36,6 +36,33 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public void RecordRun_marks_automatic_result_for_the_dashboard()
+    {
+        var timestamp = new DateTimeOffset(2026, 8, 30, 6, 0, 0, TimeSpan.Zero);
+        var state = new BackupState();
+
+        state.RecordRun(true, "Локальная копия готова.", BackupRunSource.Automatic, timestamp);
+
+        Assert.Equal(timestamp, state.LastRunUtc);
+        Assert.Equal(BackupRunSource.Automatic, state.LastRunSource);
+        Assert.True(state.LastRunSucceeded);
+        Assert.Equal("Автоматически: Локальная копия готова.", state.RecentActivities[0].Message);
+    }
+
+    [Fact]
+    public void Scheduler_reads_agent_path_from_task_xml()
+    {
+        const string xml = """
+            <Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+              <Actions><Exec><Command>"C:\Apps\CodexBridge.Agent.exe"</Command></Exec></Actions>
+            </Task>
+            """;
+
+        Assert.Equal(@"C:\Apps\CodexBridge.Agent.exe", SchedulerService.ReadAgentExecutable(xml));
+        Assert.Null(SchedulerService.ReadAgentExecutable("not xml"));
+    }
+
+    [Fact]
     public void ReduceNestedRoots_keeps_only_outer_paths()
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "CodexBridge-root"));

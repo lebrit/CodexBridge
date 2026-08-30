@@ -10,10 +10,6 @@ try
     var stateStore = new StateStore(files);
     var processRunner = new ProcessRunner();
     var restic = new ResticService(processRunner);
-    var settings = await settingsStore.LoadAsync();
-
-    var discovery = new ProjectDiscoveryService(catalogStore);
-    await discovery.RefreshAsync(settings);
 
     var coordinator = new BackupCoordinator(
         settingsStore,
@@ -23,7 +19,7 @@ try
         new DpapiSecretStore(),
         restic);
 
-    var result = await coordinator.RunAsync();
+    var result = await coordinator.RunAsync(BackupRunSource.Automatic);
     Console.WriteLine(result.Message);
     if (!string.IsNullOrWhiteSpace(result.Details))
         Console.WriteLine(result.Details);
