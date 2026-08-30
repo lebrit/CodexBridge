@@ -95,6 +95,7 @@ public sealed class BackupCoordinator(
                 {
                     state.LastRunSucceeded = false;
                     state.LastMessage = "Локальная копия готова, облачная ожидает повтора: " + cloud.Message;
+                    state.RecordActivity(false, state.LastMessage);
                     await stateStore.SaveAsync(state, cancellationToken);
                     return OperationResult.Fail(state.LastMessage, cloud.Details);
                 }
@@ -123,6 +124,7 @@ public sealed class BackupCoordinator(
                 {
                     state.LastRunSucceeded = false;
                     state.LastMessage = "Новые копии готовы, но очистка старых снимков требует внимания.";
+                    state.RecordActivity(false, state.LastMessage);
                     await stateStore.SaveAsync(state, cancellationToken);
                     return OperationResult.Fail(state.LastMessage, string.Join(Environment.NewLine, failures));
                 }
@@ -130,6 +132,7 @@ public sealed class BackupCoordinator(
 
             state.LastRunSucceeded = true;
             state.LastMessage = settings.CloudEnabled ? "Локальная и облачная копии готовы." : "Локальная копия готова.";
+            state.RecordActivity(true, state.LastMessage);
             await stateStore.SaveAsync(state, cancellationToken);
             return OperationResult.Ok(state.LastMessage, local.Details);
         }
@@ -144,6 +147,7 @@ public sealed class BackupCoordinator(
         var state = await stateStore.LoadAsync(cancellationToken);
         state.LastRunSucceeded = success;
         state.LastMessage = message;
+        state.RecordActivity(success, message);
         await stateStore.SaveAsync(state, cancellationToken);
         return success ? OperationResult.Ok(message, details) : OperationResult.Fail(message, details);
     }

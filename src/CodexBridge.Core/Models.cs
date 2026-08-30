@@ -50,6 +50,30 @@ public sealed class BackupState
     public DateTimeOffset? LastCheckUtc { get; set; }
     public bool LastRunSucceeded { get; set; }
     public string LastMessage { get; set; } = "Настройка ещё не завершена.";
+    public List<ActivityEntry> RecentActivities { get; set; } = [];
+
+    public void RecordActivity(bool succeeded, string message, DateTimeOffset? recordedUtc = null)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+
+        RecentActivities ??= [];
+        RecentActivities.Insert(0, new ActivityEntry
+        {
+            RecordedUtc = recordedUtc ?? DateTimeOffset.UtcNow,
+            Succeeded = succeeded,
+            Message = message.Trim()
+        });
+        if (RecentActivities.Count > 10)
+            RecentActivities.RemoveRange(10, RecentActivities.Count - 10);
+    }
+}
+
+public sealed class ActivityEntry
+{
+    public DateTimeOffset RecordedUtc { get; set; }
+    public bool Succeeded { get; set; }
+    public string Message { get; set; } = "";
 }
 
 public sealed class BackupManifest

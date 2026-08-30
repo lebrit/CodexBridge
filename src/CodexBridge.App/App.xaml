@@ -17,6 +17,9 @@
         <SolidColorBrush x:Key="ButtonHover" Color="#334155"/>
         <SolidColorBrush x:Key="AlternatingBackground" Color="#151F32"/>
         <SolidColorBrush x:Key="NavHover" Color="#1E293B"/>
+        <SolidColorBrush x:Key="StatusGood" Color="#22C55E"/>
+        <SolidColorBrush x:Key="StatusWarning" Color="#F59E0B"/>
+        <SolidColorBrush x:Key="StatusDanger" Color="#EF4444"/>
 
         <Style TargetType="Window">
             <Setter Property="Background" Value="{DynamicResource AppBackground}"/>
@@ -75,6 +78,10 @@
             <Setter Property="BorderBrush" Value="{DynamicResource PanelBorder}"/>
             <Setter Property="Padding" Value="9,7"/>
             <Setter Property="Margin" Value="0,4,0,10"/>
+        </Style>
+        <Style TargetType="ProgressBar">
+            <Setter Property="Foreground" Value="{DynamicResource Primary}"/>
+            <Setter Property="Background" Value="{DynamicResource ButtonBackground}"/>
         </Style>
         <Style TargetType="ListBox">
             <Setter Property="Background" Value="{DynamicResource InputBackground}"/>

@@ -9,11 +9,10 @@
             <ColumnDefinition Width="250"/>
         </Grid.ColumnDefinitions>
 
-        <Grid Grid.Column="0" Margin="30,24,28,20">
+        <Grid x:Name="MainContent" Grid.Column="0" Margin="30,24,28,20">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <StackPanel Margin="0,0,0,20">
@@ -26,7 +25,36 @@
                 <TabItem>
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel>
-                            <Grid Margin="0,0,0,10">
+                            <Border x:Name="ProtectionStatusCard" Style="{StaticResource PanelCard}" BorderThickness="2"
+                                    Margin="0,0,0,16" AutomationProperties.Name="Общее состояние защиты">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border x:Name="StatusIcon" Width="54" Height="54" CornerRadius="27"
+                                            VerticalAlignment="Top" Margin="0,0,16,0">
+                                        <TextBlock x:Name="StatusSymbol" Text="!" Foreground="White" FontSize="25" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="СОСТОЯНИЕ ЗАЩИТЫ" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock x:Name="ReadinessText" Text="Проверяем настройки…" FontSize="24" FontWeight="SemiBold"
+                                                   Margin="0,5,12,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="StatusDescriptionText" Text="CodexBridge проверяет хранилище и проекты."
+                                                   Foreground="{DynamicResource TextMuted}" Margin="0,5,16,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="AutomationStatusText" Text="Автокопирование: проверяется"
+                                                   Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,9,0,0"/>
+                                    </StackPanel>
+                                    <Button x:Name="PrimaryActionButton" Grid.Column="2" Style="{StaticResource PrimaryButton}"
+                                            Content="Открыть настройку" VerticalAlignment="Center" Margin="8,0,0,0"
+                                            Click="PrimaryActionButton_Click" AutomationProperties.Name="Рекомендуемое действие"/>
+                                </Grid>
+                            </Border>
+
+                            <Grid Margin="0,0,0,4">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="*"/>
@@ -34,22 +62,28 @@
                                 </Grid.ColumnDefinitions>
                                 <Border Grid.Column="0" Style="{StaticResource StatusCard}">
                                     <StackPanel>
-                                        <TextBlock Text="ГОТОВНОСТЬ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                        <TextBlock x:Name="ReadinessText" Text="Требуется настройка" FontSize="20" FontWeight="SemiBold"
-                                                   Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock Text="ПРОЕКТЫ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock x:Name="ProjectCountText" Text="0 защищено" FontSize="20" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="ProjectDetailsText" Text="Проекты ещё не найдены" Foreground="{DynamicResource TextMuted}"
+                                                   FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </Border>
                                 <Border Grid.Column="1" Style="{StaticResource StatusCard}">
                                     <StackPanel>
-                                        <TextBlock Text="ПРОЕКТЫ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                        <TextBlock x:Name="ProjectCountText" Text="0" FontSize="20" FontWeight="SemiBold" Margin="0,10,0,0"/>
+                                        <TextBlock Text="ЛОКАЛЬНАЯ КОПИЯ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock x:Name="LastBackupText" Text="Ещё не создавалась" FontSize="20" FontWeight="SemiBold"
+                                                   Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="LocalBackupDetailsText" Text="Зашифрованное хранилище"
+                                                   Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </Border>
                                 <Border Grid.Column="2" Style="{StaticResource StatusCard}" Margin="0,0,0,12">
                                     <StackPanel>
-                                        <TextBlock Text="ПОСЛЕДНЯЯ КОПИЯ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
-                                        <TextBlock x:Name="LastBackupText" Text="Ещё не запускалась" FontSize="20" FontWeight="SemiBold"
-                                                   Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock Text="ОБЛАЧНАЯ КОПИЯ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock x:Name="CloudBackupText" Text="Выключена" FontSize="20" FontWeight="SemiBold"
+                                                   Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="CloudBackupDetailsText" Text="Можно включить в настройках"
+                                                   Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </Border>
                             </Grid>
@@ -67,14 +101,27 @@
                                 </StackPanel>
                             </Border>
 
-                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14" AutomationProperties.Name="Последние операции">
                                 <StackPanel>
-                                    <TextBlock Text="Последний результат" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
-                                    <TextBlock x:Name="LastMessageText" TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                                    <TextBlock Text="Последние операции" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                    <TextBlock x:Name="LastMessageText" Text="История появится после первой операции."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,10"/>
+                                    <ItemsControl ItemsSource="{Binding RecentActivities}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{DynamicResource PanelBorder}" BorderThickness="0,1,0,0" Padding="0,8">
+                                                    <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                 </StackPanel>
                             </Border>
-                            <TextBlock Text="Ключ восстановления защищён Windows DPAPI. Сохраните его отдельную копию в менеджере паролей или на внешнем носителе."
-                                       TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                            <Border Background="{DynamicResource InputBackground}" BorderBrush="{DynamicResource PanelBorder}"
+                                    BorderThickness="1" CornerRadius="9" Padding="14">
+                                <TextBlock Text="Ключ восстановления защищён Windows DPAPI. Сохраните отдельную копию ключа в менеджере паролей или на внешнем носителе."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
@@ -238,10 +285,9 @@
                 </TabItem>
             </TabControl>
 
-            <TextBlock x:Name="BusyText" Grid.Row="2" Margin="0,12,0,0" Foreground="{DynamicResource TextMuted}"/>
         </Grid>
 
-        <Border Grid.Column="1" Background="{DynamicResource SidebarBackground}" BorderBrush="{DynamicResource PanelBorder}"
+        <Border x:Name="Sidebar" Grid.Column="1" Background="{DynamicResource SidebarBackground}" BorderBrush="{DynamicResource PanelBorder}"
                 BorderThickness="1,0,0,0" Padding="20,24">
             <Grid>
                 <Grid.RowDefinitions>
@@ -271,6 +317,20 @@
                     <Button x:Name="ThemeButton" Content="Светлая тема" Click="ToggleTheme_Click" Margin="0,0,0,12"/>
                     <TextBlock x:Name="VersionText" Foreground="{DynamicResource TextMuted}" FontSize="12"/>
                 </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border x:Name="BusyPanel" Grid.ColumnSpan="2" Panel.ZIndex="10" Visibility="Collapsed"
+                VerticalAlignment="Bottom" Margin="30,0,278,20" Padding="16,12"
+                Background="{DynamicResource PanelBackground}" BorderBrush="{DynamicResource Primary}"
+                BorderThickness="1" CornerRadius="10" AutomationProperties.LiveSetting="Polite">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock x:Name="BusyText" Text="Выполняется операция…" FontWeight="SemiBold"/>
+                <ProgressBar x:Name="BusyProgress" Grid.Row="1" Height="4" Margin="0,9,0,0" IsIndeterminate="True"/>
             </Grid>
         </Border>
     </Grid>

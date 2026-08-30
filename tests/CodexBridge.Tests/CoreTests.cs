@@ -5,6 +5,20 @@ namespace CodexBridge.Tests;
 public sealed class CoreTests
 {
     [Fact]
+    public void RecordActivity_keeps_the_ten_newest_entries()
+    {
+        var state = new BackupState();
+        var start = new DateTimeOffset(2026, 8, 30, 0, 0, 0, TimeSpan.Zero);
+
+        for (var index = 0; index < 12; index++)
+            state.RecordActivity(index % 2 == 0, $"Операция {index}", start.AddMinutes(index));
+
+        Assert.Equal(10, state.RecentActivities.Count);
+        Assert.Equal("Операция 11", state.RecentActivities[0].Message);
+        Assert.Equal("Операция 2", state.RecentActivities[^1].Message);
+    }
+
+    [Fact]
     public void ReduceNestedRoots_keeps_only_outer_paths()
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "CodexBridge-root"));

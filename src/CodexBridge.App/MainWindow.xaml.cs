@@ -25,10 +25,22 @@ public partial class MainWindow : Window
     private readonly ToolInventoryService _toolInventory;
     private readonly RestoreService _restore;
     private AppSettings _settings = new();
+    private DashboardAction _dashboardAction = DashboardAction.OpenSetup;
 
     public ObservableCollection<ProjectEntry> Projects { get; } = [];
     public ObservableCollection<string> Roots { get; } = [];
     public ObservableCollection<SnapshotInfo> Snapshots { get; } = [];
+    public ObservableCollection<string> RecentActivities { get; } = [];
+
+    private enum DashboardAction
+    {
+        InstallTools,
+        OpenSetup,
+        InitializeStorage,
+        FindProjects,
+        EnableScheduler,
+        BackupNow
+    }
 
     public MainWindow()
     {
@@ -108,6 +120,31 @@ public partial class MainWindow : Window
     }
 
     private async void OpenWizard_Click(object sender, RoutedEventArgs e) => await ShowWizardAsync();
+
+    private async void PrimaryActionButton_Click(object sender, RoutedEventArgs e)
+    {
+        switch (_dashboardAction)
+        {
+            case DashboardAction.InstallTools:
+                InstallTools_Click(sender, e);
+                break;
+            case DashboardAction.OpenSetup:
+                await ShowWizardAsync();
+                break;
+            case DashboardAction.InitializeStorage:
+                await InitializeRepositoryAsync(cloud: false);
+                break;
+            case DashboardAction.FindProjects:
+                RefreshProjects_Click(sender, e);
+                break;
+            case DashboardAction.EnableScheduler:
+                InstallScheduler_Click(sender, e);
+                break;
+            case DashboardAction.BackupNow:
+                BackupNow_Click(sender, e);
+                break;
+        }
+    }
 
     private async Task ShowWizardAsync()
     {
@@ -203,7 +240,7 @@ public partial class MainWindow : Window
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
             _secrets.Save(password);
             var repository = cloud ? _settings.CloudRepository : _settings.LocalRepository;
-            ShowResult(await _restic.InitializeAsync(_settings.ResticExecutable, repository, password));
+            await ShowResultAsync(await _restic.InitializeAsync(_settings.ResticExecutable, repository, password));
             await RefreshDashboardAsync();
         });
     }
@@ -217,7 +254,7 @@ public partial class MainWindow : Window
             var discovery = await _discovery.RefreshAsync(_settings);
             ReplaceProjects(discovery.Projects);
             var coordinator = new BackupCoordinator(_settingsStore, _catalogStore, _stateStore, _files, _secrets, _restic);
-            ShowResult(await coordinator.RunAsync());
+            await ShowResultAsync(await coordinator.RunAsync(), recordActivity: false);
             await RefreshDashboardAsync();
         });
     }
@@ -229,7 +266,7 @@ public partial class MainWindow : Window
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
             var result = await _restic.CheckAsync(_settings.ResticExecutable, _settings.LocalRepository, password);
-            ShowResult(result);
+            await ShowResultAsync(result);
             if (result.Succeeded)
             {
                 var state = await _stateStore.LoadAsync();
@@ -253,7 +290,7 @@ public partial class MainWindow : Window
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
             var result = await _restic.CheckAsync(_settings.ResticExecutable, SelectedRepository(), password, deep: true);
-            ShowResult(result);
+            await ShowResultAsync(result);
             if (result.Succeeded)
             {
                 var state = await _stateStore.LoadAsync();
@@ -268,13 +305,13 @@ public partial class MainWindow : Window
     {
         await SaveSettingsCoreAsync();
         var agent = Path.Combine(AppContext.BaseDirectory, "CodexBridge.Agent.exe");
-        ShowResult(await _scheduler.InstallAsync(_settings.ScheduledTaskName, agent));
+        await ShowResultAsync(await _scheduler.InstallAsync(_settings.ScheduledTaskName, agent));
         await RefreshDashboardAsync();
     }
 
     private async void RemoveScheduler_Click(object sender, RoutedEventArgs e)
     {
-        ShowResult(await _scheduler.RemoveAsync(_settings.ScheduledTaskName));
+        await ShowResultAsync(await _scheduler.RemoveAsync(_settings.ScheduledTaskName));
         await RefreshDashboardAsync();
     }
 
@@ -282,7 +319,7 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync("Установка restic и rclone…", async () =>
         {
-            ShowResult(await _toolInstaller.InstallAsync());
+            await ShowResultAsync(await _toolInstaller.InstallAsync());
             await RefreshDashboardAsync();
         });
     }
@@ -292,7 +329,7 @@ public partial class MainWindow : Window
         await RunBusyAsync("Обновление списка программ…", async () =>
         {
             await SaveSettingsCoreAsync();
-            ShowResult(await _toolInventory.CaptureAsync(_settings.IncludeVsCode));
+            await ShowResultAsync(await _toolInventory.CaptureAsync(_settings.IncludeVsCode));
         });
     }
 
@@ -307,7 +344,7 @@ public partial class MainWindow : Window
             return;
 
         await RunBusyAsync("Установка приложений…", async () =>
-            ShowResult(await _toolInventory.InstallAppsAsync(_settings.IncludeVsCode)));
+            await ShowResultAsync(await _toolInventory.InstallAppsAsync(_settings.IncludeVsCode)));
     }
 
     private void ConfigureRclone_Click(object sender, RoutedEventArgs e)
@@ -401,7 +438,7 @@ public partial class MainWindow : Window
         {
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
-            ShowResult(await _restore.RestoreSnapshotAsync(
+            await ShowResultAsync(await _restore.RestoreSnapshotAsync(
                 _settings, SelectedRepository(), password, snapshot.Id, DestinationText.Text));
         });
     }
@@ -481,31 +518,129 @@ public partial class MainWindow : Window
     {
         var state = await _stateStore.LoadAsync();
         var protectedCount = Projects.Count(project => project.IsProtected && project.Status != ProjectStatus.Missing);
-        ProjectCountText.Text = $"{protectedCount} защищено / {Projects.Count} всего";
-        LastBackupText.Text = state.LastLocalBackupUtc is null
-            ? "Ещё не запускалась"
-            : state.LastLocalBackupUtc.Value.ToLocalTime().ToString("g");
-        LastMessageText.Text = state.LastMessage;
+        var missingCount = Projects.Count(project => project.IsProtected && project.Status == ProjectStatus.Missing);
+        ProjectCountText.Text = $"{protectedCount} защищено";
+        ProjectDetailsText.Text = missingCount > 0
+            ? $"{missingCount} недоступно · {Projects.Count} всего"
+            : $"Все доступны · {Projects.Count} всего";
+
+        LastBackupText.Text = FormatRelativeTime(state.LastLocalBackupUtc, "Ещё не создавалась");
+        LocalBackupDetailsText.Text = state.LastLocalBackupUtc is null
+            ? "Первая копия будет зашифрована"
+            : "Последняя успешная: " + state.LastLocalBackupUtc.Value.ToLocalTime().ToString("g");
+        CloudBackupText.Text = !_settings.CloudEnabled
+            ? "Выключена"
+            : FormatRelativeTime(state.LastCloudBackupUtc, "Ещё не создавалась");
+        CloudBackupDetailsText.Text = !_settings.CloudEnabled
+            ? "Можно включить в настройках"
+            : state.LastCloudBackupUtc is null
+                ? "Ожидает первой загрузки"
+                : "Последняя успешная: " + state.LastCloudBackupUtc.Value.ToLocalTime().ToString("g");
+        LastMessageText.Text = string.IsNullOrWhiteSpace(state.LastMessage)
+            ? "История появится после первой операции."
+            : state.LastMessage;
+
+        RecentActivities.Clear();
+        state.RecentActivities ??= [];
+        foreach (var activity in state.RecentActivities.Take(6))
+        {
+            var marker = activity.Succeeded ? "✓" : "!";
+            RecentActivities.Add($"{marker}  {activity.RecordedUtc.ToLocalTime():g} — {activity.Message}");
+        }
 
         var taskInstalled = await _scheduler.ExistsAsync(_settings.ScheduledTaskName);
         var resticAvailable = (await _restic.VersionAsync(_settings.ResticExecutable)).Succeeded;
-        ReadinessText.Text = !resticAvailable
-            ? "Нужен restic"
-            : !_secrets.Exists
-            ? "Нужен ключ"
-            : !Directory.Exists(_settings.LocalRepository)
-                ? "Нужно хранилище"
-                : protectedCount == 0
-                    ? "Нет проектов"
-                    : !taskInstalled
-                        ? "Автобэкап выключен"
-                        : state.LastRunSucceeded ? "Готово" : "Требует внимания";
+        AutomationStatusText.Text = taskInstalled
+            ? "Автокопирование: каждый час"
+            : "Автокопирование выключено";
+
+        if (!resticAvailable)
+            SetDashboardStatus("Нужны инструменты резервного копирования",
+                "Установите restic и rclone, после этого CodexBridge сможет создавать зашифрованные снимки.",
+                "Установить инструменты", DashboardAction.InstallTools, "StatusWarning", "!");
+        else if (!_secrets.Exists)
+            SetDashboardStatus("Сохраните ключ восстановления",
+                "Без ключа невозможно создать или открыть зашифрованную копию.",
+                "Открыть мастер", DashboardAction.OpenSetup, "StatusWarning", "!");
+        else if (string.IsNullOrWhiteSpace(_settings.LocalRepository))
+            SetDashboardStatus("Выберите локальное хранилище",
+                "Укажите отдельную папку, в которой будут храниться зашифрованные снимки.",
+                "Открыть мастер", DashboardAction.OpenSetup, "StatusWarning", "!");
+        else if (!Directory.Exists(_settings.LocalRepository))
+            SetDashboardStatus("Подготовьте локальное хранилище",
+                "Выбранная папка ещё не создана или сейчас недоступна.",
+                "Подключить хранилище", DashboardAction.InitializeStorage, "StatusWarning", "!");
+        else if (protectedCount == 0)
+            SetDashboardStatus("Найдите проекты для защиты",
+                "CodexBridge пока не видит ни одного доступного защищаемого проекта.",
+                "Найти проекты", DashboardAction.FindProjects, "StatusWarning", "!");
+        else if (missingCount > 0)
+            SetDashboardStatus("Некоторые проекты недоступны",
+                "Проверьте подключённые диски или обновите список проектов.",
+                "Обновить список", DashboardAction.FindProjects, "StatusWarning", "!");
+        else if (state.LastLocalBackupUtc is null)
+            SetDashboardStatus("Всё готово к первой копии",
+                "Настройки заполнены. Создайте первый зашифрованный снимок проектов.",
+                "Создать первую копию", DashboardAction.BackupNow, "StatusWarning", "!");
+        else if (!state.LastRunSucceeded)
+            SetDashboardStatus("Резервная копия требует внимания",
+                state.LastMessage,
+                "Повторить копирование", DashboardAction.BackupNow, "StatusDanger", "!");
+        else if (!taskInstalled)
+            SetDashboardStatus("Проекты защищены вручную",
+                "Последняя копия успешна, но автоматическое расписание пока выключено.",
+                "Включить автобэкап", DashboardAction.EnableScheduler, "StatusWarning", "!");
+        else
+            SetDashboardStatus("Всё защищено",
+                "Последняя копия успешна, проекты доступны, автоматическое расписание работает.",
+                "Создать копию сейчас", DashboardAction.BackupNow, "StatusGood", "✓");
+    }
+
+    private void SetDashboardStatus(
+        string title,
+        string description,
+        string actionText,
+        DashboardAction action,
+        string colorResource,
+        string symbol)
+    {
+        ReadinessText.Text = title;
+        StatusDescriptionText.Text = description;
+        PrimaryActionButton.Content = actionText;
+        _dashboardAction = action;
+        StatusSymbol.Text = symbol;
+        var brush = (Brush)Application.Current.Resources[colorResource];
+        ProtectionStatusCard.BorderBrush = brush;
+        StatusIcon.Background = brush;
+    }
+
+    private static string FormatRelativeTime(DateTimeOffset? value, string emptyText)
+    {
+        if (value is null)
+            return emptyText;
+
+        var elapsed = DateTimeOffset.UtcNow - value.Value;
+        if (elapsed < TimeSpan.FromMinutes(1))
+            return "Только что";
+        if (elapsed < TimeSpan.FromHours(1))
+            return $"{Math.Max(1, (int)elapsed.TotalMinutes)} мин назад";
+        if (elapsed < TimeSpan.FromDays(1))
+            return $"{Math.Max(1, (int)elapsed.TotalHours)} ч назад";
+        if (elapsed < TimeSpan.FromDays(7))
+            return $"{Math.Max(1, (int)elapsed.TotalDays)} дн назад";
+        return value.Value.ToLocalTime().ToString("d");
     }
 
     private async Task RunBusyAsync(string message, Func<Task> action)
     {
-        RootGrid.IsEnabled = false;
+        if (BusyPanel.Visibility == Visibility.Visible)
+            return;
+
+        MainContent.IsEnabled = false;
+        Sidebar.IsEnabled = false;
         BusyText.Text = message;
+        BusyPanel.Visibility = Visibility.Visible;
+        BusyProgress.IsIndeterminate = true;
         try
         {
             await action();
@@ -513,28 +648,57 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             AppendLog("Ошибка: " + exception.Message);
+            AddActivityToDashboard(false, exception.Message);
+            try
+            {
+                var state = await _stateStore.LoadAsync();
+                state.RecordActivity(false, exception.Message);
+                await _stateStore.SaveAsync(state);
+            }
+            catch
+            {
+                // Основная ошибка уже попадёт в файловый журнал ниже.
+            }
             var logPath = ErrorLog.Write("Интерфейс", exception.Message, exception.ToString());
             var logHint = string.IsNullOrWhiteSpace(logPath) ? "" : $"\n\nПодробности записаны в:\n{logPath}";
             MessageBox.Show(this, exception.Message + logHint, "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
-            RootGrid.IsEnabled = true;
+            MainContent.IsEnabled = true;
+            Sidebar.IsEnabled = true;
+            BusyProgress.IsIndeterminate = false;
+            BusyPanel.Visibility = Visibility.Collapsed;
             BusyText.Text = "";
         }
     }
 
-    private void ShowResult(OperationResult result)
+    private async Task ShowResultAsync(OperationResult result, bool recordActivity = true)
     {
         AppendLog(result.Message);
+        AddActivityToDashboard(result.Succeeded, result.Message);
         if (!string.IsNullOrWhiteSpace(result.Details))
             AppendLog(result.Details);
+        if (recordActivity)
+        {
+            var state = await _stateStore.LoadAsync();
+            state.RecordActivity(result.Succeeded, result.Message);
+            await _stateStore.SaveAsync(state);
+        }
         if (!result.Succeeded)
         {
             var logPath = ErrorLog.Write("Операция CodexBridge", result.Message, result.Details);
             var logHint = string.IsNullOrWhiteSpace(logPath) ? "" : $"\n\nПодробности записаны в:\n{logPath}";
             MessageBox.Show(this, result.Message + logHint, "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    private void AddActivityToDashboard(bool succeeded, string message)
+    {
+        LastMessageText.Text = message;
+        RecentActivities.Insert(0, $"{(succeeded ? "✓" : "!")}  {DateTimeOffset.Now:g} — {message}");
+        while (RecentActivities.Count > 6)
+            RecentActivities.RemoveAt(RecentActivities.Count - 1);
     }
 
     private void AppendLog(string message)
