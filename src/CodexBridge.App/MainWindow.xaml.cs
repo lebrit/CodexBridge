@@ -558,7 +558,31 @@ public partial class MainWindow : Window
             Snapshots.Clear();
             foreach (var snapshot in snapshots)
                 Snapshots.Add(snapshot);
+            if (snapshots.Count > 0)
+                SnapshotsList.SelectedIndex = 0;
             AppendLog($"Найдено снимков: {snapshots.Count}.");
+        });
+    }
+
+    private async void VerifyRestore_Click(object sender, RoutedEventArgs e)
+    {
+        if (SnapshotsList.SelectedItem is not SnapshotInfo snapshot)
+        {
+            MessageBox.Show(this, "Выберите снимок.", "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        await RunBusyAsync("Полная проверка снимка…", async () =>
+        {
+            await SaveSettingsCoreAsync();
+            var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
+            var result = await _restore.VerifySnapshotAsync(
+                _settings, SelectedRepository(), password, snapshot.Id);
+            var state = await _stateStore.LoadAsync();
+            state.RecordRestoreTest(result.Succeeded, result.Message);
+            await _stateStore.SaveAsync(state);
+            await ShowResultAsync(result, recordActivity: false);
+            await RefreshDashboardAsync();
         });
     }
 
@@ -694,6 +718,33 @@ public partial class MainWindow : Window
             ? "История появится после первой операции."
             : state.LastMessage;
 
+        if (state.LastRestoreTestUtc is null)
+        {
+            RestoreCheckTitleText.Text = "Проверка ещё не выполнялась";
+            RestoreCheckStatusText.Text = "Выберите снимок и запустите полную проверку перед восстановлением.";
+            RestoreCheckSymbol.Text = "?";
+            RestoreCheckIcon.Background = (Brush)Application.Current.Resources["ButtonBackground"];
+        }
+        else
+        {
+            RestoreCheckTitleText.Text = state.LastRestoreTestSucceeded
+                ? "Снимок успешно проверен"
+                : "Последняя проверка не пройдена";
+            RestoreCheckStatusText.Text = $"{FormatRelativeTime(state.LastRestoreTestUtc, "")} · {state.LastRestoreTestMessage}";
+            RestoreCheckSymbol.Text = state.LastRestoreTestSucceeded ? "✓" : "!";
+            RestoreCheckIcon.Background = (Brush)Application.Current.Resources[
+                state.LastRestoreTestSucceeded ? "StatusGood" : "StatusDanger"];
+        }
+
+        var backupFailed = state.LastRunUtc is not null && !state.LastRunSucceeded;
+        var restoreTestFailed = state.LastRestoreTestUtc is not null && !state.LastRestoreTestSucceeded;
+        AttentionCard.Visibility = backupFailed || restoreTestFailed ? Visibility.Visible : Visibility.Collapsed;
+        AttentionText.Text = backupFailed && restoreTestFailed
+            ? "Последний backup и проверка восстановления завершились ошибкой. Откройте Обзор и Восстановление."
+            : backupFailed
+                ? "Последний backup завершился ошибкой. Откройте Обзор."
+                : "Проверка восстановления завершилась ошибкой. Откройте Восстановление.";
+
         RecentActivities.Clear();
         state.RecentActivities ??= [];
         foreach (var activity in state.RecentActivities.Take(6))
@@ -805,8 +856,13 @@ public partial class MainWindow : Window
         MainContent.IsEnabled = false;
         Sidebar.IsEnabled = false;
         BusyText.Text = message;
+        BusyElapsedText.Text = "";
         BusyPanel.Visibility = Visibility.Visible;
         BusyProgress.IsIndeterminate = true;
+        var stopwatch = Stopwatch.StartNew();
+        var elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        elapsedTimer.Tick += (_, _) => BusyElapsedText.Text = $"{stopwatch.Elapsed:mm\\:ss}";
+        elapsedTimer.Start();
         try
         {
             await action();
@@ -831,11 +887,14 @@ public partial class MainWindow : Window
         }
         finally
         {
+            elapsedTimer.Stop();
+            stopwatch.Stop();
             MainContent.IsEnabled = true;
             Sidebar.IsEnabled = true;
             BusyProgress.IsIndeterminate = false;
             BusyPanel.Visibility = Visibility.Collapsed;
             BusyText.Text = "";
+            BusyElapsedText.Text = "";
         }
     }
 

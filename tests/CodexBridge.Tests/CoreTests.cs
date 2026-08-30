@@ -50,6 +50,20 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public void RecordRestoreTest_keeps_a_persistent_result()
+    {
+        var timestamp = new DateTimeOffset(2026, 8, 30, 9, 0, 0, TimeSpan.Zero);
+        var state = new BackupState();
+
+        state.RecordRestoreTest(false, "Снимок повреждён.", timestamp);
+
+        Assert.Equal(timestamp, state.LastRestoreTestUtc);
+        Assert.False(state.LastRestoreTestSucceeded);
+        Assert.Equal("Снимок повреждён.", state.LastRestoreTestMessage);
+        Assert.Equal("Проверка восстановления: Снимок повреждён.", state.RecentActivities[0].Message);
+    }
+
+    [Fact]
     public void Scheduler_reads_agent_path_from_task_xml()
     {
         const string xml = """
@@ -105,6 +119,49 @@ public sealed class CoreTests
             if (Directory.Exists(testRoot))
                 Directory.Delete(testRoot, true);
         }
+    }
+
+    [Fact]
+    public void ValidateRestoredSnapshot_detects_missing_projects()
+    {
+        var staging = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var original = Path.Combine(Path.GetPathRoot(Environment.SystemDirectory)!, "Projects", "Alpha");
+        var drive = Path.GetPathRoot(original)!.TrimEnd('\\', '/').TrimEnd(':');
+        var relative = original[Path.GetPathRoot(original)!.Length..];
+        var restored = Path.Combine(staging, drive, relative);
+        var manifest = new BackupManifest
+        {
+            Projects = [new ManifestProject { Name = "Alpha", SourcePath = original }]
+        };
+
+        try
+        {
+            Directory.CreateDirectory(restored);
+            Assert.True(RestoreService.ValidateRestoredSnapshot(staging, manifest).Succeeded);
+
+            Directory.Delete(restored, true);
+            var missing = RestoreService.ValidateRestoredSnapshot(staging, manifest);
+            Assert.False(missing.Succeeded);
+            Assert.Contains("отсутствует проектов 1", missing.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, true);
+        }
+    }
+
+    [Fact]
+    public void ResolveDestinationToken_blocks_escape_from_known_folders()
+    {
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var safe = RestoreService.ResolveDestinationToken(@"{UserProfile}\CodexBridge-Recovery\apps.json");
+
+        Assert.Equal(Path.Combine(profile, "CodexBridge-Recovery", "apps.json"), safe, ignoreCase: true);
+        Assert.Throws<InvalidDataException>(() =>
+            RestoreService.ResolveDestinationToken(@"{UserProfile}\..\outside.txt"));
+        Assert.Throws<InvalidDataException>(() =>
+            RestoreService.ResolveDestinationToken(@"C:\Windows\System32\drivers\etc\hosts"));
     }
 
     [Fact]

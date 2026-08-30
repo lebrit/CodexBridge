@@ -66,6 +66,9 @@ public sealed class BackupState
     public DateTimeOffset? LastRunUtc { get; set; }
     public BackupRunSource LastRunSource { get; set; }
     public bool LastRunSucceeded { get; set; }
+    public DateTimeOffset? LastRestoreTestUtc { get; set; }
+    public bool LastRestoreTestSucceeded { get; set; }
+    public string LastRestoreTestMessage { get; set; } = "Проверка восстановления ещё не выполнялась.";
     public string LastMessage { get; set; } = "Настройка ещё не завершена.";
     public List<ActivityEntry> RecentActivities { get; set; } = [];
 
@@ -94,6 +97,15 @@ public sealed class BackupState
         LastMessage = message.Trim();
         var prefix = source == BackupRunSource.Automatic ? "Автоматически" : "Вручную";
         RecordActivity(succeeded, $"{prefix}: {LastMessage}", timestamp);
+    }
+
+    public void RecordRestoreTest(bool succeeded, string message, DateTimeOffset? recordedUtc = null)
+    {
+        var timestamp = recordedUtc ?? DateTimeOffset.UtcNow;
+        LastRestoreTestUtc = timestamp;
+        LastRestoreTestSucceeded = succeeded;
+        LastRestoreTestMessage = message.Trim();
+        RecordActivity(succeeded, $"Проверка восстановления: {LastRestoreTestMessage}", timestamp);
     }
 }
 

@@ -171,10 +171,14 @@ public sealed class ResticService(ProcessRunner processes)
         string password,
         string snapshot,
         string target,
+        bool verify = false,
         CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(target);
-        var result = await RunAsync(executable, repository, password, ["restore", snapshot, "--target", target], cancellationToken);
+        var arguments = new List<string> { "restore", snapshot, "--target", target };
+        if (verify)
+            arguments.Add("--verify");
+        var result = await RunAsync(executable, repository, password, arguments, cancellationToken);
         return result.Succeeded
             ? OperationResult.Ok("Снимок извлечён во временный каталог.", LastNonEmptyLine(result.Output))
             : OperationResult.Fail("Не удалось извлечь снимок.", result.Combined);
