@@ -21,6 +21,8 @@ public static class AppPaths
     public static string RestoreTransactionsDirectory => Path.Combine(DataDirectory, "restore-transactions");
     public static string AppInventoryFile => Path.Combine(DataDirectory, "winget-packages.json");
     public static string VsCodeExtensionsFile => Path.Combine(DataDirectory, "vscode-extensions.txt");
+    public static string PortableCodexConfigFile => Path.Combine(DataDirectory, "codex-config-portable.toml");
+    public static string GitProfileFile => Path.Combine(DataDirectory, "git-profile.json");
     public static string BackupLockFile => Path.Combine(DataDirectory, "backup.lock");
 
     public static void EnsureCreated()
@@ -189,6 +191,23 @@ public static class BackupFiles
         "**/restic-password.dpapi"
     ];
 
+    public static IReadOnlyList<string> ExcludedForSafety { get; } =
+    [
+        "Codex auth.json и OAuth-сессии",
+        "активная state_5.sqlite и другие внутренние базы Codex",
+        "приватные ключи, .env и файлы сертификатов",
+        "локальные индексы Codebase Memory и глобальный индекс Graphify",
+        "кэши установленных плагинов"
+    ];
+
+    public static IReadOnlyList<string> RequiresManualAction { get; } =
+    [
+        "повторный вход в Codex, GitHub и облачные сервисы",
+        "повторная настройка секретов и переменных окружения MCP",
+        "переустановка Graphify, Codebase Memory и других машинных инструментов",
+        "выбор нового пути Obsidian vault, если он не входит в защищаемый проект"
+    ];
+
     public static async Task EnsureExcludesAsync(CancellationToken cancellationToken = default)
     {
         AppPaths.EnsureCreated();
@@ -201,12 +220,16 @@ public static class BackupFiles
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var candidates = new List<ManifestEnvironmentItem>
         {
-            Item("Codex config", Path.Combine(profile, ".codex", "config.toml"), "{UserProfile}\\.codex\\config.toml"),
+            Item("Portable Codex config", AppPaths.PortableCodexConfigFile, "{UserProfile}\\.codex\\config.toml"),
+            Item("Global Codex AGENTS", Path.Combine(profile, ".codex", "AGENTS.md"), "{UserProfile}\\.codex\\AGENTS.md"),
+            Item("Global Codex AGENTS override", Path.Combine(profile, ".codex", "AGENTS.override.md"), "{UserProfile}\\.codex\\AGENTS.override.md"),
             Item("Codex rules", Path.Combine(profile, ".codex", "rules"), "{UserProfile}\\.codex\\rules"),
             Item("Codex memories", Path.Combine(profile, ".codex", "memories"), "{UserProfile}\\.codex\\memories"),
             Item("Legacy Codex skills", Path.Combine(profile, ".codex", "skills"), "{UserProfile}\\.codex\\skills"),
             Item("User agent skills", Path.Combine(profile, ".agents", "skills"), "{UserProfile}\\.agents\\skills"),
-            Item("WinGet app inventory", AppPaths.AppInventoryFile, "{UserProfile}\\CodexBridge-Recovery\\winget-packages.json")
+            Item("WinGet app inventory", AppPaths.AppInventoryFile, "{UserProfile}\\CodexBridge-Recovery\\winget-packages.json"),
+            Item("Portable Git profile", AppPaths.GitProfileFile, "{UserProfile}\\CodexBridge-Recovery\\git-profile.json"),
+            Item("Obsidian vault registry", Path.Combine(appData, "obsidian", "obsidian.json"), "{UserProfile}\\CodexBridge-Recovery\\obsidian-vaults.json")
         };
 
         if (includeVsCode)
@@ -233,6 +256,24 @@ public static class BackupFiles
 
 public sealed class ToolInventoryService(ProcessRunner processes)
 {
+    private static readonly string[] PortableGitKeys =
+    [
+        "user.name",
+        "user.email",
+        "init.defaultBranch",
+        "core.autocrlf",
+        "core.longpaths",
+        "pull.rebase",
+        "pull.ff",
+        "fetch.prune"
+    ];
+
+    private static readonly string[] SensitiveCodexKeyFragments =
+    [
+        "token", "secret", "password", "api_key", "api-key",
+        "authorization", "bearer", "credential", "header"
+    ];
+
     public static string? FindVsCodeExecutable()
     {
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -247,6 +288,65 @@ public sealed class ToolInventoryService(ProcessRunner processes)
         }.FirstOrDefault(File.Exists);
     }
 
+    public static string? FindGitExecutable()
+    {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var candidates = new List<string>
+        {
+            Path.Combine(programFiles, "Git", "cmd", "git.exe"),
+            Path.Combine(programFiles, "Git", "bin", "git.exe"),
+            Path.Combine(local, "Programs", "Git", "cmd", "git.exe")
+        };
+        candidates.AddRange((Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(path => Path.Combine(path, "git.exe")));
+        return candidates.FirstOrDefault(File.Exists);
+    }
+
+    public static bool IsPortableGitKey(string key) =>
+        PortableGitKeys.Contains(key, StringComparer.OrdinalIgnoreCase);
+
+    public static string SanitizeCodexConfig(string content, out int redactedSettings)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        var lines = content.ReplaceLineEndings("\n").Split('\n');
+        var sensitiveSection = false;
+        redactedSettings = 0;
+
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var trimmed = lines[index].Trim();
+            if (trimmed.StartsWith('[') && trimmed.EndsWith(']'))
+            {
+                var section = trimmed.ToLowerInvariant();
+                sensitiveSection = section.Contains("mcp_servers", StringComparison.Ordinal)
+                                   && (section.EndsWith(".env]", StringComparison.Ordinal)
+                                       || section.EndsWith(".http_headers]", StringComparison.Ordinal)
+                                       || section.EndsWith(".env_http_headers]", StringComparison.Ordinal));
+                continue;
+            }
+
+            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+                continue;
+            var separator = trimmed.IndexOf('=');
+            if (separator < 1)
+                continue;
+
+            var key = trimmed[..separator].Trim().Trim('"', '\'').ToLowerInvariant();
+            var sensitiveKey = key.Equals("env", StringComparison.Ordinal)
+                               || SensitiveCodexKeyFragments.Any(key.Contains);
+            if (!sensitiveSection && !sensitiveKey)
+                continue;
+
+            var indentation = lines[index][..(lines[index].Length - lines[index].TrimStart().Length)];
+            lines[index] = $"{indentation}# CodexBridge: sensitive setting omitted ({key})";
+            redactedSettings++;
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
     public static IReadOnlyList<string> ParseExtensions(string content) =>
         content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(line => line.Contains('.') && !line.StartsWith('#'))
@@ -256,6 +356,8 @@ public sealed class ToolInventoryService(ProcessRunner processes)
     public async Task<OperationResult> CaptureAsync(bool includeVsCode, CancellationToken cancellationToken = default)
     {
         AppPaths.EnsureCreated();
+        var codex = await CaptureCodexConfigAsync(cancellationToken);
+        var gitProfile = await CaptureGitProfileAsync(cancellationToken);
         var winget = await processes.RunAsync("winget.exe",
         [
             "export", "--output", AppPaths.AppInventoryFile, "--include-versions",
@@ -281,11 +383,18 @@ public sealed class ToolInventoryService(ProcessRunner processes)
             }
         }
 
-        return winget.Succeeded
-            ? OperationResult.Ok(vsCode?.Succeeded == true
-                ? "Список программ и расширений VS Code обновлён."
-                : "Список программ обновлён.", vsCode?.Details ?? vsCode?.Message ?? "")
-            : OperationResult.Fail("Не удалось обновить список программ.", winget.Combined);
+        var results = new[] { codex, gitProfile, winget.Succeeded
+            ? OperationResult.Ok("Список программ WinGet обновлён.")
+            : OperationResult.Fail("Не удалось обновить список программ WinGet.", winget.Combined), vsCode }
+            .Where(result => result is not null)
+            .Cast<OperationResult>()
+            .ToList();
+        var details = string.Join(Environment.NewLine, results.Select(result => result.Message)
+            .Concat(results.Select(result => result.Details))
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
+        return results.All(result => result.Succeeded)
+            ? OperationResult.Ok("Переносимый профиль среды обновлён.", details)
+            : OperationResult.Fail("Профиль среды обновлён не полностью.", details);
     }
 
     public async Task<OperationResult> InstallAppsAsync(bool includeVsCode, CancellationToken cancellationToken = default)
@@ -303,14 +412,125 @@ public sealed class ToolInventoryService(ProcessRunner processes)
         ], cancellationToken: cancellationToken);
 
         var vsCode = includeVsCode ? await InstallVsCodeExtensionsAsync(cancellationToken) : null;
-        var succeeded = result.Succeeded && (vsCode?.Succeeded ?? true);
+        var gitProfile = await ApplyGitProfileAsync(cancellationToken);
+        var succeeded = result.Succeeded && (vsCode?.Succeeded ?? true) && gitProfile.Succeeded;
         var message = succeeded
-            ? includeVsCode ? "Установка приложений и расширений VS Code завершена." : "Установка доступных приложений завершена."
-            : "Некоторые приложения или расширения установить не удалось.";
-        var details = string.Join(Environment.NewLine, new[] { result.Combined, vsCode?.Details, vsCode?.Message }
+            ? includeVsCode
+                ? "Установка приложений, расширений VS Code и Git-профиля завершена."
+                : "Установка приложений и Git-профиля завершена."
+            : "Некоторые приложения или настройки среды применить не удалось.";
+        var details = string.Join(Environment.NewLine,
+            new[] { result.Combined, vsCode?.Details, vsCode?.Message, gitProfile.Details, gitProfile.Message }
             .Where(value => !string.IsNullOrWhiteSpace(value)));
         return succeeded ? OperationResult.Ok(message, details) : OperationResult.Fail(message, details);
     }
+
+    private static async Task<OperationResult> CaptureCodexConfigAsync(CancellationToken cancellationToken)
+    {
+        var source = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "config.toml");
+        try
+        {
+            File.Delete(AppPaths.PortableCodexConfigFile);
+            if (!File.Exists(source))
+                return OperationResult.Ok("Конфигурация Codex не найдена; шаг пропущен.");
+
+            var sanitized = SanitizeCodexConfig(
+                await File.ReadAllTextAsync(source, cancellationToken), out var redacted);
+            await File.WriteAllTextAsync(
+                AppPaths.PortableCodexConfigFile, sanitized, new UTF8Encoding(false), cancellationToken);
+            return OperationResult.Ok($"Переносимая конфигурация Codex готова; скрыто чувствительных значений: {redacted}.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return OperationResult.Fail("Не удалось подготовить переносимую конфигурацию Codex.", exception.Message);
+        }
+    }
+
+    private async Task<OperationResult> CaptureGitProfileAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            File.Delete(AppPaths.GitProfileFile);
+            var executable = FindGitExecutable();
+            if (executable is null)
+                return OperationResult.Ok("Git не найден; переносимый Git-профиль пропущен.");
+
+            var profile = new PortableGitProfile { CapturedUtc = DateTimeOffset.UtcNow };
+            var failures = new List<string>();
+            foreach (var key in PortableGitKeys)
+            {
+                var result = await processes.RunAsync(
+                    executable, ["config", "--global", "--get", key], cancellationToken: cancellationToken);
+                if (result.Succeeded && !string.IsNullOrWhiteSpace(result.Output))
+                    profile.Settings[key] = result.Output.Trim();
+                else if (result.ExitCode != 1)
+                    failures.Add(key);
+            }
+
+            await new JsonFileStore().SaveAsync(AppPaths.GitProfileFile, profile, cancellationToken);
+            return failures.Count == 0
+                ? OperationResult.Ok($"Переносимый Git-профиль готов; параметров: {profile.Settings.Count}.")
+                : OperationResult.Fail("Некоторые разрешённые Git-настройки прочитать не удалось.", string.Join(", ", failures));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return OperationResult.Fail("Не удалось подготовить переносимый Git-профиль.", exception.Message);
+        }
+    }
+
+    private async Task<OperationResult> ApplyGitProfileAsync(CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "CodexBridge-Recovery", "git-profile.json");
+        if (!File.Exists(path))
+            return OperationResult.Ok("Восстановленный Git-профиль отсутствует; шаг пропущен.");
+
+        var executable = FindGitExecutable();
+        if (executable is null)
+            return OperationResult.Fail("Git не установлен; переносимый профиль не применён.");
+
+        PortableGitProfile profile;
+        try
+        {
+            profile = await new JsonFileStore().LoadAsync(path, () => new PortableGitProfile(), cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return OperationResult.Fail("Не удалось прочитать восстановленный Git-профиль.", exception.Message);
+        }
+
+        var applied = 0;
+        var rejected = 0;
+        var failures = new List<string>();
+        foreach (var setting in profile.Settings ?? new Dictionary<string, string>())
+        {
+            if (!IsPortableGitKey(setting.Key) || !IsPortableGitValue(setting.Value))
+            {
+                rejected++;
+                continue;
+            }
+
+            var result = await processes.RunAsync(
+                executable, ["config", "--global", "--replace-all", setting.Key, setting.Value],
+                cancellationToken: cancellationToken);
+            if (result.Succeeded)
+                applied++;
+            else
+                failures.Add(setting.Key);
+        }
+
+        var summary = $"Применено Git-настроек: {applied}; отклонено небезопасных: {rejected}.";
+        return failures.Count == 0
+            ? OperationResult.Ok(summary)
+            : OperationResult.Fail(summary, "Ошибки: " + string.Join(", ", failures));
+    }
+
+    private static bool IsPortableGitValue(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Length <= 1024
+        && value.IndexOfAny(['\0', '\r', '\n']) < 0;
 
     private async Task<OperationResult> InstallVsCodeExtensionsAsync(CancellationToken cancellationToken)
     {

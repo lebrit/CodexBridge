@@ -14,7 +14,8 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 - a durable per-file transaction journal and SHA-256-verified rollback after interruption or restart;
 - an isolated A-to-B migration lab with a real restic snapshot, full data verification, a repeated run, and conflict preservation;
 - restored Windows ACLs and directory `ReadOnly` flags are normalized only inside CodexBridge's temporary staging directory so data from another Windows SID remains accessible and removable;
-- optional WinGet inventory, safe Codex configuration, and VS Code settings when VS Code is installed;
+- optional WinGet inventory, sanitized Codex configuration, global AGENTS, memories, skills, a portable Git profile, and VS Code settings when VS Code is installed;
+- an Obsidian vault registry is retained as recovery metadata without applying old machine paths;
 - no telemetry, hosted backend, copied passwords, OAuth sessions, or active Codex database;
 - reproducible GitHub Actions prereleases with tests, a public-data safety check, and SHA-256 files.
 
@@ -27,6 +28,8 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 5. Before recovery, run the verified dry-run. If recovery is interrupted, use the transaction journal in the Recovery page to resume a verified rollback.
 
 Current public binaries are unsigned. The SignPath Foundation application was not approved because this new project does not yet meet the program's external visibility requirements. See [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
+
+Before each snapshot, CodexBridge creates a separate portable `config.toml`. MCP environment/header values and settings whose names indicate tokens, passwords, credentials, or secrets are omitted. Git restore uses a small allowlist and never imports credential helpers, signing keys, URL rewrites, or HTTP headers.
 
 ## Build
 

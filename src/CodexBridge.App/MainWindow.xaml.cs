@@ -477,7 +477,7 @@ public partial class MainWindow : Window
 
     private async void CaptureApps_Click(object sender, RoutedEventArgs e)
     {
-        await RunBusyAsync("Обновление списка программ…", async cancellationToken =>
+        await RunBusyAsync("Обновление переносимого профиля среды…", async cancellationToken =>
         {
             await SaveSettingsCoreAsync();
             await ShowResultAsync(await _toolInventory.CaptureAsync(_settings.IncludeVsCode, cancellationToken));
@@ -488,13 +488,13 @@ public partial class MainWindow : Window
     {
         var confirmation = MessageBox.Show(this,
             _settings.IncludeVsCode
-                ? "Установить доступные приложения и расширения VS Code из восстановленных списков? Для некоторых установщиков может потребоваться UAC."
-                : "Установить доступные приложения из восстановленного WinGet-списка? Для некоторых установщиков может потребоваться UAC.",
-            "Установка программ", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                ? "Установить доступные приложения и расширения VS Code, затем применить разрешённые Git-настройки? Для некоторых установщиков может потребоваться UAC."
+                : "Установить доступные приложения и применить разрешённые Git-настройки? Для некоторых установщиков может потребоваться UAC.",
+            "Восстановление среды", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (confirmation != MessageBoxResult.Yes)
             return;
 
-        await RunBusyAsync("Установка приложений…", async cancellationToken =>
+        await RunBusyAsync("Восстановление приложений и профиля…", async cancellationToken =>
             await ShowResultAsync(await _toolInventory.InstallAppsAsync(_settings.IncludeVsCode, cancellationToken)));
     }
 

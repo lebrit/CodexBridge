@@ -124,12 +124,14 @@ public sealed class ActivityEntry
 
 public sealed class BackupManifest
 {
-    public int SchemaVersion { get; set; } = 1;
+    public int SchemaVersion { get; set; } = 2;
     public string ApplicationVersion { get; set; } = "";
     public string MachineName { get; set; } = "";
     public DateTimeOffset CreatedUtc { get; set; }
     public List<ManifestProject> Projects { get; set; } = [];
     public List<ManifestEnvironmentItem> Environment { get; set; } = [];
+    public List<string> ExcludedForSafety { get; set; } = [];
+    public List<string> RequiresManualAction { get; set; } = [];
 }
 
 public sealed class ManifestProject
@@ -145,6 +147,13 @@ public sealed class ManifestEnvironmentItem
     public string Name { get; set; } = "";
     public string SourcePath { get; set; } = "";
     public string DestinationToken { get; set; } = "";
+}
+
+public sealed class PortableGitProfile
+{
+    public int SchemaVersion { get; set; } = 1;
+    public DateTimeOffset CapturedUtc { get; set; }
+    public Dictionary<string, string> Settings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed record OperationResult(bool Succeeded, string Message, string Details = "")

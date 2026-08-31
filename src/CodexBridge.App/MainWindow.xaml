@@ -285,14 +285,23 @@
                         <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
                             <StackPanel>
                                 <TextBlock Text="Перенос приложений" FontSize="19" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                                <TextBlock Text="CodexBridge сохраняет WinGet-манифест. Пароли, лицензии и учётные данные не копируются."
+                                <TextBlock Text="CodexBridge сохраняет WinGet-манифест и переносимый профиль среды. Пароли, лицензии и учётные данные не копируются."
                                            TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,18"/>
                                 <WrapPanel>
-                                    <Button Style="{StaticResource PrimaryButton}" Content="Обновить список программ" Click="CaptureApps_Click"/>
-                                    <Button Content="Установить после восстановления" Click="InstallApps_Click"/>
+                                    <Button Style="{StaticResource PrimaryButton}" Content="Обновить профиль среды" Click="CaptureApps_Click"/>
+                                    <Button Content="Установить и применить профиль" Click="InstallApps_Click"/>
                                 </WrapPanel>
                                 <TextBlock Text="Недоступные в WinGet программы будут пропущены."
                                            TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Что переносится автоматически" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <TextBlock Text="• очищенная конфигурация Codex и глобальные AGENTS&#x0a;• rules, memories и пользовательские skills&#x0a;• разрешённые Git-настройки и реестр vault Obsidian&#x0a;• проектные AGENTS и Graphify вместе с защищаемыми проектами"
+                                           TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                <TextBlock Text="Токены, auth.json, SQLite Codex, приватные ключи и машинные индексы исключаются. После переезда потребуется повторный вход и пересборка индексов."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
                             </StackPanel>
                         </Border>
                         <Border x:Name="VsCodeCard" Style="{StaticResource PanelCard}" Visibility="Collapsed">

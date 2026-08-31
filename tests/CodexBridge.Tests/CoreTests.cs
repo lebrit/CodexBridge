@@ -345,6 +345,44 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public void SanitizeCodexConfig_removes_mcp_secrets_and_preserves_safe_settings()
+    {
+        const string source = """
+                              model = "gpt-test"
+                              [mcp_servers.demo]
+                              command = "node"
+                              env = { API_TOKEN = "inline-secret" }
+                              [mcp_servers.demo.env]
+                              API_KEY = "section-secret"
+                              MODE = "development"
+                              [features]
+                              theme = "dark"
+                              password = "top-secret"
+                              """;
+
+        var sanitized = ToolInventoryService.SanitizeCodexConfig(source, out var redacted);
+
+        Assert.Equal(4, redacted);
+        Assert.Contains("model = \"gpt-test\"", sanitized);
+        Assert.Contains("command = \"node\"", sanitized);
+        Assert.Contains("theme = \"dark\"", sanitized);
+        Assert.DoesNotContain("inline-secret", sanitized);
+        Assert.DoesNotContain("section-secret", sanitized);
+        Assert.DoesNotContain("development", sanitized);
+        Assert.DoesNotContain("top-secret", sanitized);
+    }
+
+    [Fact]
+    public void PortableGitProfile_allows_only_non_secret_portable_keys()
+    {
+        Assert.True(ToolInventoryService.IsPortableGitKey("user.email"));
+        Assert.True(ToolInventoryService.IsPortableGitKey("core.autocrlf"));
+        Assert.False(ToolInventoryService.IsPortableGitKey("credential.helper"));
+        Assert.False(ToolInventoryService.IsPortableGitKey("http.extraHeader"));
+        Assert.False(ToolInventoryService.IsPortableGitKey("url.https://token@example.test.insteadOf"));
+    }
+
+    [Fact]
     public void ErrorLog_writes_utf8_file_only_when_called()
     {
         var directory = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
@@ -380,6 +418,7 @@ public sealed class CoreTests
         var projectAlpha = Path.Combine(machineA, "Projects", "Project Alpha");
         var projectSecondary = Path.Combine(machineA, "Projects", "Project Secondary");
         var config = Path.Combine(machineA, "Profile", ".codex", "config.toml");
+        var gitProfile = Path.Combine(machineA, "Profile", "CodexBridge-Recovery", "git-profile.json");
         var manifestPath = Path.Combine(machineA, "CodexBridge", "codexbridge-backup-manifest.json");
         var repository = Path.Combine(testRoot, "repository");
         var excludes = Path.Combine(testRoot, "restic-excludes.txt");
@@ -394,6 +433,8 @@ public sealed class CoreTests
             await File.WriteAllTextAsync(Path.Combine(projectAlpha, "src", "app.txt"), "codexbridge-v1");
             await File.WriteAllTextAsync(Path.Combine(projectSecondary, "docs", "guide.md"), "secondary project");
             await File.WriteAllTextAsync(config, "model = 'test-only'");
+            Directory.CreateDirectory(Path.GetDirectoryName(gitProfile)!);
+            await File.WriteAllTextAsync(gitProfile, "{\"settings\":{\"core.autocrlf\":\"true\"}}");
             await File.WriteAllTextAsync(excludes, "**/.env\n**/auth.json\n");
 
             var manifest = new BackupManifest
@@ -413,8 +454,16 @@ public sealed class CoreTests
                         Name = "Codex config",
                         SourcePath = config,
                         DestinationToken = @"{UserProfile}\.codex\config.toml"
+                    },
+                    new ManifestEnvironmentItem
+                    {
+                        Name = "Portable Git profile",
+                        SourcePath = gitProfile,
+                        DestinationToken = @"{UserProfile}\CodexBridge-Recovery\git-profile.json"
                     }
-                ]
+                ],
+                ExcludedForSafety = BackupFiles.ExcludedForSafety.ToList(),
+                RequiresManualAction = BackupFiles.RequiresManualAction.ToList()
             };
             var files = new JsonFileStore();
             await files.SaveAsync(manifestPath, manifest);
@@ -423,7 +472,7 @@ public sealed class CoreTests
             var processes = new ProcessRunner();
             var restic = new ResticService(processes, cache, excludes);
             Assert.True((await restic.InitializeAsync(executable, repository, password)).Succeeded);
-            var sources = new[] { projectAlpha, projectSecondary, config, manifestPath };
+            var sources = new[] { projectAlpha, projectSecondary, config, gitProfile, manifestPath };
             Assert.True((await restic.BackupAsync(executable, repository, password, sources)).Succeeded);
 
             await File.WriteAllTextAsync(Path.Combine(projectAlpha, "src", "app.txt"), "codexbridge-v2");
@@ -456,13 +505,15 @@ public sealed class CoreTests
                 stagingA, Path.GetFileName(manifestPath), SearchOption.AllDirectories));
             var restoredManifest = await files.LoadAsync(restoredManifestPath, () => new BackupManifest());
             Assert.True(RestoreService.ValidateRestoredSnapshot(stagingA, restoredManifest).Succeeded);
+            Assert.NotEmpty(restoredManifest.ExcludedForSafety);
+            Assert.NotEmpty(restoredManifest.RequiresManualAction);
 
             var journals = Path.Combine(testRoot, "journals");
             var firstStore = new RestoreTransactionStore(journals);
             var firstTransaction = await firstStore.BeginAsync(snapshot.Id, machineB);
             var first = await MergeMigrationAsync(stagingA, machineB, restoredManifest, firstTransaction);
             await firstStore.CompleteAsync(firstTransaction, first);
-            Assert.Equal(new MergeResult(4, 0, 0, 0), first);
+            Assert.Equal(new MergeResult(5, 0, 0, 0), first);
 
             var changedDestination = Path.Combine(machineB, "Projects", "Project Alpha", "src", "app.txt");
             await File.WriteAllTextAsync(changedDestination, "machine-b-local-change");
@@ -475,7 +526,7 @@ public sealed class CoreTests
             var second = await MergeMigrationAsync(stagingB, machineB, restoredManifest, secondTransaction);
             await secondStore.CompleteAsync(secondTransaction, second);
 
-            Assert.Equal(new MergeResult(0, 3, 1, 0), second);
+            Assert.Equal(new MergeResult(0, 4, 1, 0), second);
             Assert.Equal("machine-b-local-change", await File.ReadAllTextAsync(changedDestination));
             Assert.Equal("codexbridge-v2", await File.ReadAllTextAsync(Path.Combine(
                 secondTransaction.ConflictRoot, "Project Alpha", "src", "app.txt")));
@@ -507,13 +558,27 @@ public sealed class CoreTests
             total = Combine(total, result);
         }
 
-        var config = Assert.Single(Directory.EnumerateFiles(staging, "config.toml", SearchOption.AllDirectories));
-        var configResult = await SafeMergeService.MergeFileAsync(
-            config,
-            Path.Combine(destinationRoot, "Profile", ".codex", "config.toml"),
-            Path.Combine(transaction.ConflictRoot, "environment", "config.toml"),
-            transaction);
-        return Combine(total, configResult);
+        foreach (var item in manifest.Environment)
+        {
+            var source = File.Exists(item.SourcePath)
+                ? Assert.Single(Directory.EnumerateFiles(
+                    staging, Path.GetFileName(item.SourcePath), SearchOption.AllDirectories))
+                : Assert.Single(Directory.EnumerateDirectories(
+                    staging, Path.GetFileName(item.SourcePath), SearchOption.AllDirectories));
+            var relative = item.DestinationToken
+                .Replace("{UserProfile}", "Profile", StringComparison.OrdinalIgnoreCase)
+                .Replace("{AppData}", "AppData", StringComparison.OrdinalIgnoreCase)
+                .TrimStart('\\', '/');
+            var destination = Path.Combine(destinationRoot, relative);
+            var conflicts = Path.Combine(transaction.ConflictRoot, "environment", item.Name);
+            var result = Directory.Exists(source)
+                ? await SafeMergeService.MergeDirectoryAsync(source, destination, conflicts, transaction)
+                : await SafeMergeService.MergeFileAsync(
+                    source, destination, Path.Combine(conflicts, Path.GetFileName(destination)), transaction);
+            total = Combine(total, result);
+        }
+
+        return total;
     }
 
     private static MergeResult Combine(MergeResult left, MergeResult right) => new(

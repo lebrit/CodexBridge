@@ -57,7 +57,9 @@ public sealed class BackupCoordinator(
                     SourcePath = project.Path,
                     IsGit = project.IsGit
                 }).ToList(),
-                Environment = environment
+                Environment = environment,
+                ExcludedForSafety = BackupFiles.ExcludedForSafety.ToList(),
+                RequiresManualAction = BackupFiles.RequiresManualAction.ToList()
             };
 
             await files.SaveAsync(AppPaths.BackupManifestFile, manifest, cancellationToken);
