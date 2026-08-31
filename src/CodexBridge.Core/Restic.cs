@@ -250,8 +250,19 @@ public sealed class ResticService(
             return ownership;
 
         var icacls = Path.Combine(Environment.SystemDirectory, "icacls.exe");
-        return await processes.RunAsync(
+        var reset = await processes.RunAsync(
             icacls, [target, "/reset", "/T", "/C", "/Q"],
+            cancellationToken: cancellationToken);
+        if (!reset.Succeeded)
+            return reset;
+
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        var currentUserSid = identity.User?.Value;
+        if (string.IsNullOrWhiteSpace(currentUserSid))
+            return new ProcessResult(1, "", "Не удалось определить SID текущего пользователя Windows.");
+
+        return await processes.RunAsync(
+            icacls, [target, "/grant:r", $"*{currentUserSid}:(OI)(CI)F", "/T", "/Q"],
             cancellationToken: cancellationToken);
     }
 
