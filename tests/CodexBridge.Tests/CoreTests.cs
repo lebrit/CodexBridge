@@ -418,6 +418,7 @@ public sealed class CoreTests
             };
             var files = new JsonFileStore();
             await files.SaveAsync(manifestPath, manifest);
+            File.SetAttributes(projectAlpha, File.GetAttributes(projectAlpha) | FileAttributes.ReadOnly);
 
             var processes = new ProcessRunner();
             var restic = new ResticService(processes, cache, excludes);
@@ -430,6 +431,7 @@ public sealed class CoreTests
             manifest.CreatedUtc = DateTimeOffset.UtcNow;
             await files.SaveAsync(manifestPath, manifest);
             Assert.True((await restic.BackupAsync(executable, repository, password, sources)).Succeeded);
+            File.SetAttributes(projectAlpha, File.GetAttributes(projectAlpha) & ~FileAttributes.ReadOnly);
 
             var environment = new Dictionary<string, string>
             {
@@ -447,6 +449,9 @@ public sealed class CoreTests
             var restore = await restic.RestoreRawAsync(
                 executable, repository, password, snapshot.Id, stagingA, verify: true);
             Assert.True(restore.Succeeded, $"{restore.Message}{Environment.NewLine}{restore.Details}");
+            var restoredProjectAlpha = Assert.Single(Directory.EnumerateDirectories(
+                stagingA, "Project Alpha", SearchOption.AllDirectories));
+            Assert.False(File.GetAttributes(restoredProjectAlpha).HasFlag(FileAttributes.ReadOnly));
             var restoredManifestPath = Assert.Single(Directory.EnumerateFiles(
                 stagingA, Path.GetFileName(manifestPath), SearchOption.AllDirectories));
             var restoredManifest = await files.LoadAsync(restoredManifestPath, () => new BackupManifest());

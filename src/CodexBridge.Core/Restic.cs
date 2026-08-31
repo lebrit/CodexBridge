@@ -261,9 +261,28 @@ public sealed class ResticService(
         if (string.IsNullOrWhiteSpace(currentUserSid))
             return new ProcessResult(1, "", "Не удалось определить SID текущего пользователя Windows.");
 
-        return await processes.RunAsync(
+        var access = await processes.RunAsync(
             icacls, [target, "/grant:r", $"*{currentUserSid}:(OI)(CI)F", "/T", "/Q"],
             cancellationToken: cancellationToken);
+        if (!access.Succeeded)
+            return access;
+
+        try
+        {
+            foreach (var directory in Directory.EnumerateDirectories(
+                         target, "*", SearchOption.AllDirectories).Prepend(target))
+            {
+                var attributes = File.GetAttributes(directory);
+                if (attributes.HasFlag(FileAttributes.ReadOnly))
+                    File.SetAttributes(directory, attributes & ~FileAttributes.ReadOnly);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new ProcessResult(1, "", exception.Message);
+        }
+
+        return access;
     }
 
     private Task<ProcessResult> RunAsync(
