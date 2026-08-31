@@ -1,0 +1,91 @@
+name: Build and publish Windows package
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codexbridge-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up restic migration lab
+        shell: pwsh
+        run: |
+          $restic = Get-Command restic -ErrorAction SilentlyContinue
+          if (-not $restic) {
+            winget install --exact --id restic.restic --scope User `
+              --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0) { throw 'winget could not install restic.' }
+
+            $restic = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet" `
+              -Filter restic.exe -File -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if (-not $restic) { throw 'restic.exe was not found after installation.' }
+            Split-Path -Parent $restic.FullName | Add-Content -LiteralPath $env:GITHUB_PATH
+            $resticPath = $restic.FullName
+          }
+          else {
+            $resticPath = $restic.Source
+          }
+          & $resticPath version
+
+      - name: Compute version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$props = Get-Content Directory.Build.props -Raw
+          $baseVersion = [string]$props.Project.PropertyGroup.VersionPrefix
+          $version = "$baseVersion-build.$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build, test and package
+        shell: pwsh
+        run: .\scripts\Build-Release.ps1 -Version "${{ steps.version.outputs.version }}" -RequireResticIntegration
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: CodexBridge-${{ steps.version.outputs.version }}-win-x64
+          path: |
+            artifacts/CodexBridge-*.zip
+            artifacts/CodexBridge-*.sha256
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish versioned prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $zip = (Get-ChildItem artifacts\CodexBridge-*.zip -File).FullName
+          $hash = (Get-ChildItem artifacts\CodexBridge-*.sha256 -File).FullName
+          $notes = @"
+          Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, and public-safety validation.
+
+          Code signing policy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md
+
+          This build is unsigned unless both these release notes and its Authenticode signature prove otherwise. The SignPath Foundation application was not approved because the project does not yet meet the program's public-visibility requirements.
+          "@
+          gh release create "v$env:VERSION" $zip $hash `
+            --repo "$env:GITHUB_REPOSITORY" `
+            --target "$env:GITHUB_SHA" `
+            --title "CodexBridge $env:VERSION" `
+            --notes $notes `
+            --prerelease

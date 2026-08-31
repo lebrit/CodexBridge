@@ -1,0 +1,87 @@
+<Window x:Class="CodexBridge.App.SetupWizardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Мастер настройки CodexBridge" Width="780" Height="590" MinWidth="720" MinHeight="540"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+    <Grid Margin="30">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Margin="0,0,0,22">
+            <TextBlock Text="Первичная настройка" FontSize="28" FontWeight="SemiBold"/>
+            <TextBlock x:Name="StepText" Text="Шаг 1 из 3" Foreground="{DynamicResource TextMuted}" Margin="0,5,0,0"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" Style="{StaticResource PanelCard}">
+            <Grid>
+                <ScrollViewer x:Name="WelcomePage" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,0,8,0">
+                    <TextBlock Text="Добро пожаловать в CodexBridge" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,14"/>
+                    <TextBlock Text="Мастер подготовит приложение так, чтобы новые проекты и восстановленная среда находились в одном понятном месте."
+                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" FontSize="15" Margin="0,0,0,22"/>
+                    <TextBlock Text="Что будет настроено" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                    <TextBlock Text="• единая папка проектов" Margin="0,5"/>
+                    <TextBlock Text="• локальное зашифрованное хранилище" Margin="0,5"/>
+                    <TextBlock Text="• ключ восстановления, защищённый Windows DPAPI" Margin="0,5"/>
+                    <TextBlock Text="• при желании — вторая копия через rclone в вашем облаке" Margin="0,5"/>
+                    <TextBlock Text="CodexBridge не отправляет список ваших проектов разработчику и не публикует пользовательские данные в GitHub."
+                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,22,0,0"/>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <StackPanel x:Name="ProjectsPage" Visibility="Collapsed">
+                    <TextBlock Text="Единая папка проектов" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <TextBlock Text="Новые и восстановленные проекты будут собраны здесь. Текущие папки останутся на месте, пока вы сами их не перенесёте."
+                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,20"/>
+                    <TextBlock Text="Папка проектов" FontWeight="SemiBold"/>
+                    <DockPanel Margin="0,4,0,12">
+                        <Button DockPanel.Dock="Right" Content="Выбрать…" Click="BrowseProjectRoot_Click"/>
+                        <TextBox x:Name="ProjectRootText"/>
+                    </DockPanel>
+                    <TextBlock Text="Эта папка станет основной и для восстановления на новом компьютере. Существующие корни CodexBridge не удалит."
+                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                </StackPanel>
+
+                <ScrollViewer x:Name="BackupPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="Защита резервной копии" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <TextBlock Text="Локальное хранилище" FontWeight="SemiBold"/>
+                        <DockPanel Margin="0,4,0,10">
+                            <Button DockPanel.Dock="Right" Content="Выбрать…" Click="BrowseRepository_Click"/>
+                            <TextBox x:Name="LocalRepositoryText"/>
+                        </DockPanel>
+
+                        <TextBlock Text="Ключ восстановления" FontWeight="SemiBold"/>
+                        <DockPanel Margin="0,4,0,6">
+                            <Button DockPanel.Dock="Right" Content="Создать новый" Click="GenerateKey_Click"/>
+                            <TextBox x:Name="RecoveryKeyText" FontFamily="Consolas"/>
+                        </DockPanel>
+                        <Button Content="Скопировать ключ" HorizontalAlignment="Left" Click="CopyKey_Click"/>
+                        <TextBlock Text="Сохраните ключ отдельно. Без него резервную копию нельзя восстановить на другом компьютере."
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,16"/>
+
+                        <CheckBox x:Name="CloudEnabledCheck" Content="Добавить вторую копию в моё облако" Margin="0,0,0,8"/>
+                        <TextBlock Text="Адрес restic/rclone (можно заполнить позже)"/>
+                        <TextBox x:Name="CloudRepositoryText"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="0,22,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Button Content="Пропустить" Click="Skip_Click"/>
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <Button x:Name="BackButton" Content="Назад" Click="Back_Click" Visibility="Hidden"/>
+                <Button x:Name="NextButton" Style="{StaticResource PrimaryButton}" Content="Далее" Click="Next_Click" Margin="0,0,0,8"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

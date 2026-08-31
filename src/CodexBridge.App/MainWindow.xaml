@@ -1,12 +1,513 @@
-﻿<Window x:Class="CodexBridge.App.MainWindow"
+<Window x:Class="CodexBridge.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:CodexBridge.App"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="CodexBridge" Height="780" Width="1220" MinHeight="680" MinWidth="1000"
+        WindowStartupLocation="CenterScreen">
+    <Grid x:Name="RootGrid">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="250"/>
+        </Grid.ColumnDefinitions>
 
+        <Grid x:Name="MainContent" Grid.Column="0" Margin="30,24,28,20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Margin="0,0,0,20">
+                <TextBlock x:Name="PageTitle" Text="Обзор" FontSize="28" FontWeight="SemiBold"/>
+                <TextBlock x:Name="PageSubtitle" Text="Состояние резервного копирования и быстрые действия"
+                           Foreground="{DynamicResource TextMuted}" Margin="0,5,0,0"/>
+            </StackPanel>
+
+            <TabControl x:Name="ContentTabs" Grid.Row="1" SelectedIndex="0" Style="{StaticResource ContentOnlyTabs}">
+                <TabItem>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <Border x:Name="ProtectionStatusCard" Style="{StaticResource PanelCard}" BorderThickness="2"
+                                    Margin="0,0,0,16" AutomationProperties.Name="Общее состояние защиты">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border x:Name="StatusIcon" Width="54" Height="54" CornerRadius="27"
+                                            VerticalAlignment="Top" Margin="0,0,16,0">
+                                        <TextBlock x:Name="StatusSymbol" Text="!" Foreground="White" FontSize="25" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="СОСТОЯНИЕ ЗАЩИТЫ" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock x:Name="ReadinessText" Text="Проверяем настройки…" FontSize="24" FontWeight="SemiBold"
+                                                   Margin="0,5,12,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="StatusDescriptionText" Text="CodexBridge проверяет хранилище и проекты."
+                                                   Foreground="{DynamicResource TextMuted}" Margin="0,5,16,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="AutomationStatusText" Text="Автокопирование: проверяется"
+                                                   Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,9,0,0"/>
+                                    </StackPanel>
+                                    <Button x:Name="PrimaryActionButton" Grid.Column="2" Style="{StaticResource PrimaryButton}"
+                                            Content="Открыть настройку" VerticalAlignment="Center" Margin="8,0,0,0"
+                                            Click="PrimaryActionButton_Click" AutomationProperties.Name="Рекомендуемое действие"/>
+                                </Grid>
+                            </Border>
+
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Style="{StaticResource StatusCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="ПРОЕКТЫ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock x:Name="ProjectCountText" Text="0 защищено" FontSize="20" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="ProjectDetailsText" Text="Проекты ещё не найдены" Foreground="{DynamicResource TextMuted}"
+                                                   FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="1" Style="{StaticResource StatusCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="ЛОКАЛЬНАЯ КОПИЯ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock x:Name="LastBackupText" Text="Ещё не создавалась" FontSize="20" FontWeight="SemiBold"
+                                                   Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="LocalBackupDetailsText" Text="Зашифрованное хранилище"
+                                                   Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="2" Style="{StaticResource StatusCard}" Margin="0,0,0,12">
+                                    <StackPanel>
+                                        <TextBlock Text="ОБЛАЧНАЯ КОПИЯ" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextMuted}"/>
+                                        <TextBlock x:Name="CloudBackupText" Text="Выключена" FontSize="20" FontWeight="SemiBold"
+                                                   Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="CloudBackupDetailsText" Text="Можно включить в настройках"
+                                                   Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock Text="Быстрые действия" FontSize="19" FontWeight="SemiBold" Margin="0,0,0,14"/>
+                                    <WrapPanel>
+                                        <Button Content="Найти проекты" Click="RefreshProjects_Click"/>
+                                        <Button Style="{StaticResource PrimaryButton}" Content="Создать копию сейчас" Click="BackupNow_Click"/>
+                                        <Button Content="Проверить хранилище" Click="CheckRepository_Click"/>
+                                        <Button Content="Глубокая проверка 5%" Click="DeepCheckRepository_Click"/>
+                                        <Button Content="Включить автобэкап" Click="InstallScheduler_Click"/>
+                                        <Button Content="Запустить автобэкап сейчас" Click="RunScheduledBackup_Click"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14" AutomationProperties.Name="Последние операции">
+                                <StackPanel>
+                                    <TextBlock Text="Последние операции" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                                    <TextBlock x:Name="LastMessageText" Text="История появится после первой операции."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,10"/>
+                                    <ItemsControl ItemsSource="{Binding RecentActivities}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{DynamicResource PanelBorder}" BorderThickness="0,1,0,0" Padding="0,8">
+                                                    <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                            <Border Background="{DynamicResource InputBackground}" BorderBrush="{DynamicResource PanelBorder}"
+                                    BorderThickness="1" CornerRadius="9" Padding="14">
+                                <TextBlock Text="Ключ восстановления защищён Windows DPAPI. Сохраните отдельную копию ключа в менеджере паролей или на внешнем носителе."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <TabItem>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Style="{StaticResource PanelCard}" Padding="14" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="220"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Margin="0,0,12,0">
+                                    <TextBlock Text="Поиск по названию или пути" FontWeight="SemiBold"/>
+                                    <TextBox x:Name="ProjectSearchText" TextChanged="ProjectFilter_Changed"
+                                             AutomationProperties.Name="Поиск проектов"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                                    <TextBlock Text="Состояние" FontWeight="SemiBold"/>
+                                    <ComboBox x:Name="ProjectStatusFilter" SelectedIndex="0" SelectionChanged="ProjectFilter_Changed"
+                                              AutomationProperties.Name="Фильтр состояния проектов">
+                                        <ComboBoxItem Content="Все проекты" Tag="All"/>
+                                        <ComboBoxItem Content="Защищённые" Tag="Protected"/>
+                                        <ComboBoxItem Content="Исключённые" Tag="Excluded"/>
+                                        <ComboBoxItem Content="Папка не найдена" Tag="Missing"/>
+                                        <ComboBoxItem Content="Требуют внимания" Tag="NeedsAttention"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <Button Grid.Column="2" Content="Сбросить" VerticalAlignment="Bottom" Margin="0,0,0,10"
+                                        Click="ClearProjectFilter_Click"/>
+                            </Grid>
+                        </Border>
+
+                        <WrapPanel Grid.Row="1" Margin="0,0,0,8">
+                            <Button Style="{StaticResource PrimaryButton}" Content="Сканировать" Click="RefreshProjects_Click"/>
+                            <Button Content="Сохранить выбор" Click="SaveProjects_Click"/>
+                            <Button Content="Открыть папку" Click="OpenSelectedProject_Click"/>
+                            <Button Content="Защищать показанные" Click="ProtectVisibleProjects_Click"/>
+                            <Button Content="Исключить показанные" Click="ExcludeVisibleProjects_Click"/>
+                        </WrapPanel>
+                        <DataGrid x:Name="ProjectsGrid" Grid.Row="2" ItemsSource="{Binding Projects}" AutoGenerateColumns="False"
+                                  CanUserAddRows="False" IsReadOnly="False" SelectionMode="Single" AlternationCount="2"
+                                  MouseDoubleClick="ProjectsGrid_MouseDoubleClick" AutomationProperties.Name="Список проектов">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="Защищать" Binding="{Binding IsProtected, Mode=TwoWay}" Width="90"/>
+                                <DataGridTextColumn Header="Название" Binding="{Binding Name}" IsReadOnly="True" Width="180"/>
+                                <DataGridTextColumn Header="Путь" Binding="{Binding Path}" IsReadOnly="True" Width="*"/>
+                                <DataGridCheckBoxColumn Header="Git" Binding="{Binding IsGit}" IsReadOnly="True" Width="60"/>
+                                <DataGridTextColumn Header="Состояние" Binding="{Binding StatusDisplay}" IsReadOnly="True" Width="150"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TextBlock x:Name="ProjectListSummaryText" Grid.Row="3" Foreground="{DynamicResource TextMuted}"
+                                   Margin="0,9,0,0" Text="Показано 0 проектов"/>
+                    </Grid>
+                </TabItem>
+
+                <TabItem>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="Безопасное восстановление" FontSize="20" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Выберите источник и папку проектов. CodexBridge полностью проверит снимок и заранее рассчитает изменения, не затрагивая рабочие файлы."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,6,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource PanelCard}">
+                                <StackPanel>
+                                    <TextBlock Text="1. Выберите источник" FontSize="17" FontWeight="SemiBold"/>
+                                    <WrapPanel Margin="0,8,0,14">
+                                        <RadioButton x:Name="LocalSourceRadio" GroupName="RestoreSource" Style="{StaticResource NavItem}"
+                                                     Content="Локальное хранилище" IsChecked="True" Width="220" Margin="0,0,8,0"/>
+                                        <RadioButton x:Name="CloudSourceRadio" GroupName="RestoreSource" Style="{StaticResource NavItem}"
+                                                     Content="Облачное хранилище" Width="220" Margin="0"/>
+                                    </WrapPanel>
+                                    <Button Content="Загрузить список снимков" HorizontalAlignment="Left" Click="LoadSnapshots_Click"/>
+                                    <ListBox x:Name="SnapshotsList" ItemsSource="{Binding Snapshots}" DisplayMemberPath="Display" Height="180"
+                                             Margin="0,5,0,16" AutomationProperties.Name="Список снимков для восстановления"
+                                             SelectionChanged="SnapshotsList_SelectionChanged"/>
+
+                                    <TextBlock Text="2. Выберите единую папку проектов" FontSize="17" FontWeight="SemiBold"/>
+                                    <DockPanel Margin="0,7,0,0">
+                                        <Button DockPanel.Dock="Right" Content="Выбрать…" Click="ChooseDestination_Click"/>
+                                        <TextBox x:Name="DestinationText" AutomationProperties.Name="Папка восстановления проектов"/>
+                                    </DockPanel>
+                                    <TextBlock Text="Эта папка используется для точного расчёта новых, совпадающих и конфликтующих файлов."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,14"/>
+
+                                    <TextBlock Text="3. Проверьте снимок и изменения" FontSize="17" FontWeight="SemiBold"/>
+                                    <Border Background="{DynamicResource InputBackground}" BorderBrush="{DynamicResource PanelBorder}"
+                                            BorderThickness="1" CornerRadius="9" Padding="14" Margin="0,9,0,12">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border x:Name="RestoreCheckIcon" Width="38" Height="38" CornerRadius="19"
+                                                    Background="{DynamicResource ButtonBackground}" Margin="0,0,12,0">
+                                                <TextBlock x:Name="RestoreCheckSymbol" Text="?" FontSize="18" FontWeight="Bold"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock x:Name="RestoreCheckTitleText" Text="Проверка ещё не выполнялась" FontWeight="SemiBold"/>
+                                                <TextBlock x:Name="RestoreCheckStatusText"
+                                                           Text="Потребуется временное свободное место примерно как для исходных данных снимка."
+                                                           Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                    <Button Content="Проверить и рассчитать изменения" HorizontalAlignment="Left" Click="VerifyRestore_Click"/>
+
+                                    <TextBlock Text="4. Восстановите снимок" FontSize="17" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                    <TextBlock Text="Существующие отличающиеся файлы не перезаписываются: входящая версия попадёт в .codexbridge-conflicts."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,14"/>
+                                    <Button Style="{StaticResource PrimaryButton}" Content="Восстановить выбранный снимок"
+                                            HorizontalAlignment="Left" Click="Restore_Click"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource PanelCard}" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Журнал восстановления и откат" FontSize="20" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Каждый создаваемый файл фиксируется до записи. После сбоя выберите незавершённую операцию и выполните проверенный откат. Изменённые вами файлы удаляться не будут."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,6,0,12"/>
+                                    <ListBox x:Name="RestoreTransactionsList" ItemsSource="{Binding RestoreTransactions}"
+                                             DisplayMemberPath="Display" Height="130" Margin="0,0,0,10"
+                                             SelectionChanged="RestoreTransactionsList_SelectionChanged"
+                                             AutomationProperties.Name="Журнал транзакций восстановления"/>
+                                    <Border Background="{DynamicResource InputBackground}" BorderBrush="{DynamicResource PanelBorder}"
+                                            BorderThickness="1" CornerRadius="9" Padding="12" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <TextBlock x:Name="RestoreTransactionTitleText" Text="Операций пока нет" FontWeight="SemiBold"/>
+                                            <TextBlock x:Name="RestoreTransactionDetailsText" Text="После первого восстановления здесь появятся состояние, папка назначения и результат."
+                                                       TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <WrapPanel>
+                                        <Button Content="Обновить журнал" Click="RefreshRestoreTransactions_Click"/>
+                                        <Button x:Name="RollbackTransactionButton" Content="Откатить выбранную операцию"
+                                                Click="RollbackTransaction_Click" IsEnabled="False"/>
+                                        <Button Content="Открыть папку журнала" Click="OpenRestoreTransactions_Click"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <TabItem>
+                    <StackPanel MaxWidth="840" HorizontalAlignment="Left" VerticalAlignment="Top">
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Перенос приложений" FontSize="19" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <TextBlock Text="CodexBridge сохраняет WinGet-манифест и переносимый профиль среды. Пароли, лицензии и учётные данные не копируются."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,18"/>
+                                <WrapPanel>
+                                    <Button Style="{StaticResource PrimaryButton}" Content="Обновить профиль среды" Click="CaptureApps_Click"/>
+                                    <Button Content="Установить и применить профиль" Click="InstallApps_Click"/>
+                                </WrapPanel>
+                                <TextBlock Text="Недоступные в WinGet программы будут пропущены."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Что переносится автоматически" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <TextBlock Text="• очищенная конфигурация Codex и глобальные AGENTS&#x0a;• rules, memories и пользовательские skills&#x0a;• разрешённые Git-настройки и реестр vault Obsidian&#x0a;• проектные AGENTS и Graphify вместе с защищаемыми проектами"
+                                           TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                <TextBlock Text="Токены, auth.json, SQLite Codex, приватные ключи и машинные индексы исключаются. После переезда потребуется повторный вход и пересборка индексов."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Готовность нового компьютера" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <TextBlock Text="Быстрая локальная проверка покажет установленные инструменты, состояние MCP и необходимость перепривязки Obsidian. Секретные значения не анализируются и не выводятся."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,12"/>
+                                <Button Style="{StaticResource PrimaryButton}" Content="Проверить готовность среды" Click="DiagnoseEnvironment_Click"
+                                        HorizontalAlignment="Left" Margin="0,0,0,12"/>
+                                <Border Background="{DynamicResource InputBackground}" BorderBrush="{DynamicResource BorderBrush}"
+                                        BorderThickness="1" CornerRadius="8" Padding="12">
+                                    <TextBlock x:Name="EnvironmentDiagnosticsText" Text="Проверка ещё не запускалась."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="VsCodeCard" Style="{StaticResource PanelCard}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="VS Code обнаружен" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <CheckBox x:Name="VsCodeIncludeCheck" Content="Сохранять настройки и список расширений VS Code" Margin="0,0,0,8"/>
+                                <TextBlock Text="После восстановления расширения можно установить той же кнопкой вместе с приложениями."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </TabItem>
+
+                <TabItem>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="900" HorizontalAlignment="Left">
+                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,20,0">
+                                        <TextBlock Text="Основные настройки" FontSize="19" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Выберите, где искать проекты и где хранить основную зашифрованную копию."
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Style="{StaticResource PrimaryButton}" Content="Сохранить настройки"
+                                            Click="SaveSettings_Click" VerticalAlignment="Center" Margin="0"/>
+                                </Grid>
+                            </Border>
+
+                            <GroupBox Header="Корни проектов">
+                                <StackPanel>
+                                    <ListBox x:Name="RootsList" ItemsSource="{Binding Roots}" Height="120"/>
+                                    <TextBlock Text="Поиск выполняется только в этих папках, а не по всему компьютеру. Новые проекты будут найдены перед резервным копированием."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,8,0,0"/>
+                                    <WrapPanel Margin="0,10,0,0">
+                                        <Button Content="Добавить папку" Click="AddRoot_Click"/>
+                                        <Button Content="Убрать из списка" Click="RemoveRoot_Click"/>
+                                        <Button Style="{StaticResource PrimaryButton}" Content="Найти проекты сейчас" Click="RefreshProjects_Click"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="Локальная зашифрованная копия">
+                                <StackPanel>
+                                    <TextBlock Text="Путь репозитория"/>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="Выбрать…" Click="ChooseLocalRepository_Click"/>
+                                        <TextBox x:Name="LocalRepositoryText"/>
+                                    </DockPanel>
+                                    <TextBlock Text="Ключ восстановления"/>
+                                    <PasswordBox x:Name="PasswordInput"/>
+                                    <WrapPanel>
+                                        <Button Style="{StaticResource PrimaryButton}" Content="Создать/подключить хранилище" Click="InitializeLocal_Click"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                                <Expander x:Name="AdvancedSettingsExpander" Header="Расширенные настройки" FontSize="17" FontWeight="SemiBold"
+                                          AutomationProperties.Name="Расширенные настройки">
+                                    <StackPanel Margin="0,14,0,0" TextElement.FontSize="14" TextElement.FontWeight="Normal">
+                                        <TextBlock Text="Облако, сроки хранения снимков и системные инструменты можно настроить при необходимости."
+                                                   Foreground="{DynamicResource TextMuted}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                                        <GroupBox Header="Облачная копия">
+                                            <StackPanel>
+                                                <CheckBox x:Name="CloudEnabledCheck" Content="Включить облачный бэкап после локального" Margin="0,0,0,10"/>
+                                                <TextBlock Text="Имя rclone remote"/>
+                                                <DockPanel>
+                                                    <Button DockPanel.Dock="Right" Content="Подставить адрес" Click="UseRcloneRemote_Click"/>
+                                                    <TextBox x:Name="RcloneRemoteNameText"/>
+                                                </DockPanel>
+                                                <WrapPanel>
+                                                    <Button Content="Открыть мастер rclone" Click="ConfigureRclone_Click"/>
+                                                    <Button Content="Найти настроенные remotes" Click="DetectRcloneRemotes_Click"/>
+                                                </WrapPanel>
+                                                <TextBlock Text="Restic/rclone адрес, например rclone:my-remote:CodexBridge/restic-v1"/>
+                                                <TextBox x:Name="CloudRepositoryText"/>
+                                                <Button Content="Создать/подключить облачное хранилище" HorizontalAlignment="Left" Click="InitializeCloud_Click"/>
+                                            </StackPanel>
+                                        </GroupBox>
+
+                                        <GroupBox Header="Хранение снимков">
+                                            <StackPanel>
+                                                <CheckBox x:Name="RetentionEnabledCheck" Content="Автоматически удалять лишние старые снимки после успешного backup" Margin="0,0,0,10"/>
+                                                <WrapPanel>
+                                                    <TextBlock Text="Дней" VerticalAlignment="Center" Margin="0,0,6,8"/>
+                                                    <TextBox x:Name="KeepDailyText" Width="55"/>
+                                                    <TextBlock Text="Недель" VerticalAlignment="Center" Margin="12,0,6,8"/>
+                                                    <TextBox x:Name="KeepWeeklyText" Width="55"/>
+                                                    <TextBlock Text="Месяцев" VerticalAlignment="Center" Margin="12,0,6,8"/>
+                                                    <TextBox x:Name="KeepMonthlyText" Width="55"/>
+                                                </WrapPanel>
+                                                <TextBlock Text="По умолчанию функция выключена. При включении restic оставляет 7 дневных, 4 недельных и 6 месячных снимков."
+                                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                                            </StackPanel>
+                                        </GroupBox>
+
+                                        <GroupBox Header="Автоматизация">
+                                            <WrapPanel>
+                                                <Button Content="Установить restic и rclone" Click="InstallTools_Click"/>
+                                                <Button Style="{StaticResource PrimaryButton}" Content="Включить ежечасный бэкап" Click="InstallScheduler_Click"/>
+                                                <Button Content="Запустить сейчас" Click="RunScheduledBackup_Click"/>
+                                                <Button Content="Отключить автобэкап" Click="RemoveScheduler_Click"/>
+                                            </WrapPanel>
+                                        </GroupBox>
+
+                                        <Button Style="{StaticResource PrimaryButton}" Content="Сохранить все настройки"
+                                                HorizontalAlignment="Left" Click="SaveSettings_Click"/>
+                                    </StackPanel>
+                                </Expander>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <TabItem>
+                    <TextBox x:Name="LogText" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto" FontFamily="Consolas"/>
+                </TabItem>
+            </TabControl>
+
+        </Grid>
+
+        <Border x:Name="Sidebar" Grid.Column="1" Background="{DynamicResource SidebarBackground}" BorderBrush="{DynamicResource PanelBorder}"
+                BorderThickness="1,0,0,0" Padding="20,24">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <StackPanel Margin="6,0,6,28">
+                    <Border Width="46" Height="46" CornerRadius="12" Background="{DynamicResource Primary}" HorizontalAlignment="Left">
+                        <TextBlock Text="CB" FontSize="17" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="CodexBridge" FontSize="23" FontWeight="SemiBold" Margin="0,13,0,3"/>
+                    <TextBlock Text="Ваши проекты под защитой" Foreground="{DynamicResource TextMuted}" FontSize="12"/>
+                </StackPanel>
+
+                <StackPanel Grid.Row="1">
+                    <RadioButton x:Name="OverviewNav" GroupName="Navigation" Style="{StaticResource NavItem}" Content="Обзор" Tag="0" IsChecked="True" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="ProjectsNav" GroupName="Navigation" Style="{StaticResource NavItem}" Content="Проекты" Tag="1" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="RestoreNav" GroupName="Navigation" Style="{StaticResource NavItem}" Content="Восстановление" Tag="2" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="ProgramsNav" GroupName="Navigation" Style="{StaticResource NavItem}" Content="Программы" Tag="3" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="SettingsNav" GroupName="Navigation" Style="{StaticResource NavItem}" Content="Настройки" Tag="4" Checked="Nav_Checked"/>
+                    <RadioButton x:Name="LogNav" GroupName="Navigation" Style="{StaticResource NavItem}" Content="Журнал" Tag="5" Checked="Nav_Checked"/>
+                </StackPanel>
+
+                <StackPanel Grid.Row="2">
+                    <Border x:Name="AttentionCard" Visibility="Collapsed" Background="{DynamicResource InputBackground}"
+                            BorderBrush="{DynamicResource StatusDanger}" BorderThickness="1" CornerRadius="9"
+                            Padding="11" Margin="0,0,0,10" AutomationProperties.LiveSetting="Polite">
+                        <StackPanel>
+                            <TextBlock Text="Требует внимания" Foreground="{DynamicResource StatusDanger}" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="AttentionText" Text="Последняя операция завершилась ошибкой."
+                                       TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" FontSize="12" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Button Style="{StaticResource PrimaryButton}" Content="Мастер настройки" Click="OpenWizard_Click" Margin="0,0,0,8"/>
+                    <Button x:Name="ThemeButton" Content="Светлая тема" Click="ToggleTheme_Click" Margin="0,0,0,12"/>
+                    <TextBlock x:Name="VersionText" Foreground="{DynamicResource TextMuted}" FontSize="12"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border x:Name="BusyPanel" Grid.ColumnSpan="2" Panel.ZIndex="10" Visibility="Collapsed"
+                VerticalAlignment="Bottom" Margin="30,0,278,20" Padding="16,12"
+                Background="{DynamicResource PanelBackground}" BorderBrush="{DynamicResource Primary}"
+                BorderThickness="1" CornerRadius="10" AutomationProperties.LiveSetting="Polite">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="BusyText" Text="Выполняется операция…" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="BusyElapsedText" Grid.Column="1" Foreground="{DynamicResource TextMuted}" Margin="12,0,0,0"/>
+                    <Button x:Name="CancelBusyButton" Grid.Column="2" Content="Отмена" Click="CancelBusy_Click"
+                            Visibility="Collapsed" Margin="12,-5,0,-5" Padding="14,5"
+                            AutomationProperties.Name="Отменить текущую операцию"/>
+                </Grid>
+                <ProgressBar x:Name="BusyProgress" Grid.Row="1" Height="4" Margin="0,9,0,0" IsIndeterminate="True"/>
+            </Grid>
+        </Border>
     </Grid>
 </Window>
