@@ -13,6 +13,7 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 - conflict-safe merge: existing different files are never overwritten;
 - a durable per-file transaction journal and SHA-256-verified rollback after interruption or restart;
 - an isolated A-to-B migration lab with a real restic snapshot, full data verification, a repeated run, and conflict preservation;
+- restored Windows ACLs are reset only inside CodexBridge's temporary staging directory so data from another Windows SID remains accessible and removable;
 - optional WinGet inventory, safe Codex configuration, and VS Code settings when VS Code is installed;
 - no telemetry, hosted backend, copied passwords, OAuth sessions, or active Codex database;
 - reproducible GitHub Actions prereleases with tests, a public-data safety check, and SHA-256 files.

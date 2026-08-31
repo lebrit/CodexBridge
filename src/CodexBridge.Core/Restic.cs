@@ -224,9 +224,27 @@ public sealed class ResticService(
         if (verify)
             arguments.Add("--verify");
         var result = await RunAsync(executable, repository, password, arguments, cancellationToken);
-        return result.Succeeded
+        if (!result.Succeeded)
+            return OperationResult.Fail("Не удалось извлечь снимок.", result.Combined);
+
+        var permissions = await ResetRestorePermissionsAsync(target, cancellationToken);
+        return permissions.Succeeded
             ? OperationResult.Ok("Снимок извлечён во временный каталог.", LastNonEmptyLine(result.Output))
-            : OperationResult.Fail("Не удалось извлечь снимок.", result.Combined);
+            : OperationResult.Fail(
+                "Снимок извлечён, но Windows не позволила подготовить временные файлы для безопасного восстановления.",
+                permissions.Combined);
+    }
+
+    private Task<ProcessResult> ResetRestorePermissionsAsync(
+        string target,
+        CancellationToken cancellationToken)
+    {
+        if (!OperatingSystem.IsWindows())
+            return Task.FromResult(new ProcessResult(0, "", ""));
+
+        var icacls = Path.Combine(Environment.SystemDirectory, "icacls.exe");
+        return processes.RunAsync(icacls, [target, "/reset", "/T", "/C", "/Q"],
+            cancellationToken: cancellationToken);
     }
 
     private Task<ProcessResult> RunAsync(
