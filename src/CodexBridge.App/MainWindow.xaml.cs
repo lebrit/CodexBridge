@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private readonly SchedulerService _scheduler;
     private readonly BackupToolInstaller _toolInstaller;
     private readonly ToolInventoryService _toolInventory;
+    private readonly EnvironmentDiagnosticsService _environmentDiagnostics;
     private readonly RestoreService _restore;
     private readonly DispatcherTimer _stateRefreshTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private ICollectionView? _projectsView;
@@ -67,6 +68,7 @@ public partial class MainWindow : Window
         _scheduler = new SchedulerService(_processes);
         _toolInstaller = new BackupToolInstaller(_processes);
         _toolInventory = new ToolInventoryService(_processes);
+        _environmentDiagnostics = new EnvironmentDiagnosticsService();
         _restore = new RestoreService(_restic, _files);
 
         VersionText.Text = "Версия " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev");
@@ -496,6 +498,16 @@ public partial class MainWindow : Window
 
         await RunBusyAsync("Восстановление приложений и профиля…", async cancellationToken =>
             await ShowResultAsync(await _toolInventory.InstallAppsAsync(_settings.IncludeVsCode, cancellationToken)));
+    }
+
+    private async void DiagnoseEnvironment_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync("Проверка готовности среды…", async cancellationToken =>
+        {
+            var report = await _environmentDiagnostics.DiagnoseAsync(_settings, cancellationToken);
+            EnvironmentDiagnosticsText.Text = report.Details;
+            await ShowResultAsync(OperationResult.Ok(report.Summary, report.Details));
+        });
     }
 
     private void ConfigureRclone_Click(object sender, RoutedEventArgs e)

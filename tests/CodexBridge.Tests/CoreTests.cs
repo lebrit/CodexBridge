@@ -1,4 +1,5 @@
 using CodexBridge.Core;
+using System.Text.Json;
 
 namespace CodexBridge.Tests;
 
@@ -380,6 +381,54 @@ public sealed class CoreTests
         Assert.False(ToolInventoryService.IsPortableGitKey("credential.helper"));
         Assert.False(ToolInventoryService.IsPortableGitKey("http.extraHeader"));
         Assert.False(ToolInventoryService.IsPortableGitKey("url.https://token@example.test.insteadOf"));
+    }
+
+    [Fact]
+    public void ParseMcpServerNames_deduplicates_nested_sections()
+    {
+        const string config = """
+                              [mcp_servers.graphify]
+                              command = "graphify"
+                              [mcp_servers.graphify.env]
+                              MODE = "safe"
+                              [mcp_servers.codebase-memory-mcp]
+                              command = "server"
+                              """;
+
+        var names = EnvironmentDiagnosticsService.ParseMcpServerNames(config);
+
+        Assert.Equal(["codebase-memory-mcp", "graphify"], names);
+    }
+
+    [Fact]
+    public async Task AnalyzeObsidianRegistry_reports_existing_vaults_inside_project_roots()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var projectRoot = Path.Combine(root, "Projects");
+        var existingVault = Path.Combine(projectRoot, "Notes");
+        var missingVault = Path.Combine(root, "Old", "Missing");
+        var registry = Path.Combine(root, "obsidian.json");
+        Directory.CreateDirectory(existingVault);
+        try
+        {
+            await File.WriteAllTextAsync(registry, JsonSerializer.Serialize(new
+            {
+                vaults = new Dictionary<string, object>
+                {
+                    ["one"] = new { path = existingVault },
+                    ["two"] = new { path = missingVault }
+                }
+            }));
+
+            var result = await EnvironmentDiagnosticsService.AnalyzeObsidianRegistryAsync(
+                registry, [projectRoot]);
+
+            Assert.Equal(new ObsidianVaultSummary(2, 1, 1), result);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     [Fact]

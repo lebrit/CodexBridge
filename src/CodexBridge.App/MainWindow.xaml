@@ -304,6 +304,20 @@
                                            TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
                             </StackPanel>
                         </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Готовность нового компьютера" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                <TextBlock Text="Быстрая локальная проверка покажет установленные инструменты, состояние MCP и необходимость перепривязки Obsidian. Секретные значения не анализируются и не выводятся."
+                                           TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}" Margin="0,0,0,12"/>
+                                <Button Style="{StaticResource PrimaryButton}" Content="Проверить готовность среды" Click="DiagnoseEnvironment_Click"
+                                        HorizontalAlignment="Left" Margin="0,0,0,12"/>
+                                <Border Background="{DynamicResource InputBackground}" BorderBrush="{DynamicResource BorderBrush}"
+                                        BorderThickness="1" CornerRadius="8" Padding="12">
+                                    <TextBlock x:Name="EnvironmentDiagnosticsText" Text="Проверка ещё не запускалась."
+                                               TextWrapping="Wrap" Foreground="{DynamicResource TextMuted}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
                         <Border x:Name="VsCodeCard" Style="{StaticResource PanelCard}" Visibility="Collapsed">
                             <StackPanel>
                                 <TextBlock Text="VS Code обнаружен" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
