@@ -444,8 +444,9 @@ public sealed class CoreTests
             var snapshot = Assert.Single(await restic.SnapshotsAsync(executable, repository, password));
 
             var stagingA = Path.Combine(testRoot, "staging-a");
-            Assert.True((await restic.RestoreRawAsync(
-                executable, repository, password, snapshot.Id, stagingA, verify: true)).Succeeded);
+            var restore = await restic.RestoreRawAsync(
+                executable, repository, password, snapshot.Id, stagingA, verify: true);
+            Assert.True(restore.Succeeded, $"{restore.Message}{Environment.NewLine}{restore.Details}");
             var restoredManifestPath = Assert.Single(Directory.EnumerateFiles(
                 stagingA, Path.GetFileName(manifestPath), SearchOption.AllDirectories));
             var restoredManifest = await files.LoadAsync(restoredManifestPath, () => new BackupManifest());

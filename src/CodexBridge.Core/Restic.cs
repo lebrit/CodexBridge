@@ -235,15 +235,23 @@ public sealed class ResticService(
                 permissions.Combined);
     }
 
-    private Task<ProcessResult> ResetRestorePermissionsAsync(
+    private async Task<ProcessResult> ResetRestorePermissionsAsync(
         string target,
         CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows())
-            return Task.FromResult(new ProcessResult(0, "", ""));
+            return new ProcessResult(0, "", "");
+
+        var takeown = Path.Combine(Environment.SystemDirectory, "takeown.exe");
+        var ownership = await processes.RunAsync(
+            takeown, ["/F", target, "/R", "/D", "Y", "/SKIPSL"],
+            cancellationToken: cancellationToken);
+        if (!ownership.Succeeded)
+            return ownership;
 
         var icacls = Path.Combine(Environment.SystemDirectory, "icacls.exe");
-        return processes.RunAsync(icacls, [target, "/reset", "/T", "/C", "/Q"],
+        return await processes.RunAsync(
+            icacls, [target, "/reset", "/T", "/C", "/Q"],
             cancellationToken: cancellationToken);
     }
 
