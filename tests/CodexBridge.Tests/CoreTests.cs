@@ -365,4 +365,154 @@ public sealed class CoreTests
                 Directory.Delete(directory, true);
         }
     }
+
+    [Fact]
+    public async Task Migration_lab_restores_real_snapshot_idempotently()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("CODEXBRIDGE_RUN_RESTIC_INTEGRATION"), "1",
+                StringComparison.Ordinal))
+            return;
+
+        var executable = Environment.GetEnvironmentVariable("CODEXBRIDGE_RESTIC_EXECUTABLE") ?? "restic";
+        var testRoot = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var machineA = Path.Combine(testRoot, "machine-a");
+        var machineB = Path.Combine(testRoot, "machine-b");
+        var projectAlpha = Path.Combine(machineA, "Projects", "Project Alpha");
+        var projectSecondary = Path.Combine(machineA, "Projects", "Project Secondary");
+        var config = Path.Combine(machineA, "Profile", ".codex", "config.toml");
+        var manifestPath = Path.Combine(machineA, "CodexBridge", "codexbridge-backup-manifest.json");
+        var repository = Path.Combine(testRoot, "repository");
+        var excludes = Path.Combine(testRoot, "restic-excludes.txt");
+        var cache = Path.Combine(testRoot, "restic-cache");
+        var password = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectAlpha, "src"));
+            Directory.CreateDirectory(Path.Combine(projectSecondary, "docs"));
+            Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+            await File.WriteAllTextAsync(Path.Combine(projectAlpha, "src", "app.txt"), "codexbridge-v1");
+            await File.WriteAllTextAsync(Path.Combine(projectSecondary, "docs", "guide.md"), "secondary project");
+            await File.WriteAllTextAsync(config, "model = 'test-only'");
+            await File.WriteAllTextAsync(excludes, "**/.env\n**/auth.json\n");
+
+            var manifest = new BackupManifest
+            {
+                ApplicationVersion = "migration-lab",
+                MachineName = "MACHINE-A",
+                CreatedUtc = DateTimeOffset.UtcNow,
+                Projects =
+                [
+                    new ManifestProject { Id = Guid.NewGuid(), Name = "Project Alpha", SourcePath = projectAlpha },
+                    new ManifestProject { Id = Guid.NewGuid(), Name = "Project Secondary", SourcePath = projectSecondary }
+                ],
+                Environment =
+                [
+                    new ManifestEnvironmentItem
+                    {
+                        Name = "Codex config",
+                        SourcePath = config,
+                        DestinationToken = @"{UserProfile}\.codex\config.toml"
+                    }
+                ]
+            };
+            var files = new JsonFileStore();
+            await files.SaveAsync(manifestPath, manifest);
+
+            var processes = new ProcessRunner();
+            var restic = new ResticService(processes, cache, excludes);
+            Assert.True((await restic.InitializeAsync(executable, repository, password)).Succeeded);
+            var sources = new[] { projectAlpha, projectSecondary, config, manifestPath };
+            Assert.True((await restic.BackupAsync(executable, repository, password, sources)).Succeeded);
+
+            await File.WriteAllTextAsync(Path.Combine(projectAlpha, "src", "app.txt"), "codexbridge-v2");
+            await File.WriteAllTextAsync(Path.Combine(projectAlpha, "README.md"), "second snapshot");
+            manifest.CreatedUtc = DateTimeOffset.UtcNow;
+            await files.SaveAsync(manifestPath, manifest);
+            Assert.True((await restic.BackupAsync(executable, repository, password, sources)).Succeeded);
+
+            var environment = new Dictionary<string, string>
+            {
+                ["RESTIC_PASSWORD"] = password,
+                ["RESTIC_CACHE_DIR"] = cache
+            };
+            Assert.True((await processes.RunAsync(executable,
+                ["-r", repository, "check", "--read-data-subset=100%"], environment)).Succeeded);
+            Assert.True((await processes.RunAsync(executable,
+                ["-r", repository, "forget", "--tag", "codexbridge", "--keep-last", "1", "--prune"],
+                environment)).Succeeded);
+            var snapshot = Assert.Single(await restic.SnapshotsAsync(executable, repository, password));
+
+            var stagingA = Path.Combine(testRoot, "staging-a");
+            Assert.True((await restic.RestoreRawAsync(
+                executable, repository, password, snapshot.Id, stagingA, verify: true)).Succeeded);
+            var restoredManifestPath = Assert.Single(Directory.EnumerateFiles(
+                stagingA, Path.GetFileName(manifestPath), SearchOption.AllDirectories));
+            var restoredManifest = await files.LoadAsync(restoredManifestPath, () => new BackupManifest());
+            Assert.True(RestoreService.ValidateRestoredSnapshot(stagingA, restoredManifest).Succeeded);
+
+            var journals = Path.Combine(testRoot, "journals");
+            var firstStore = new RestoreTransactionStore(journals);
+            var firstTransaction = await firstStore.BeginAsync(snapshot.Id, machineB);
+            var first = await MergeMigrationAsync(stagingA, machineB, restoredManifest, firstTransaction);
+            await firstStore.CompleteAsync(firstTransaction, first);
+            Assert.Equal(new MergeResult(4, 0, 0, 0), first);
+
+            var changedDestination = Path.Combine(machineB, "Projects", "Project Alpha", "src", "app.txt");
+            await File.WriteAllTextAsync(changedDestination, "machine-b-local-change");
+
+            var stagingB = Path.Combine(testRoot, "staging-b");
+            Assert.True((await restic.RestoreRawAsync(
+                executable, repository, password, snapshot.Id, stagingB, verify: true)).Succeeded);
+            var secondStore = new RestoreTransactionStore(journals);
+            var secondTransaction = await secondStore.BeginAsync(snapshot.Id, machineB);
+            var second = await MergeMigrationAsync(stagingB, machineB, restoredManifest, secondTransaction);
+            await secondStore.CompleteAsync(secondTransaction, second);
+
+            Assert.Equal(new MergeResult(0, 3, 1, 0), second);
+            Assert.Equal("machine-b-local-change", await File.ReadAllTextAsync(changedDestination));
+            Assert.Equal("codexbridge-v2", await File.ReadAllTextAsync(Path.Combine(
+                secondTransaction.ConflictRoot, "Project Alpha", "src", "app.txt")));
+            Console.WriteLine($"MIGRATION_LAB_OK=snapshot={snapshot.Id};added={first.Added};identical={second.Identical};conflicts={second.Conflicts}");
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, true);
+        }
+    }
+
+    private static async Task<MergeResult> MergeMigrationAsync(
+        string staging,
+        string destinationRoot,
+        BackupManifest manifest,
+        RestoreTransaction transaction)
+    {
+        var total = new MergeResult(0, 0, 0, 0);
+        foreach (var project in manifest.Projects)
+        {
+            var source = Assert.Single(Directory.EnumerateDirectories(
+                staging, project.Name, SearchOption.AllDirectories));
+            var result = await SafeMergeService.MergeDirectoryAsync(
+                source,
+                Path.Combine(destinationRoot, "Projects", project.Name),
+                Path.Combine(transaction.ConflictRoot, project.Name),
+                transaction);
+            total = Combine(total, result);
+        }
+
+        var config = Assert.Single(Directory.EnumerateFiles(staging, "config.toml", SearchOption.AllDirectories));
+        var configResult = await SafeMergeService.MergeFileAsync(
+            config,
+            Path.Combine(destinationRoot, "Profile", ".codex", "config.toml"),
+            Path.Combine(transaction.ConflictRoot, "environment", "config.toml"),
+            transaction);
+        return Combine(total, configResult);
+    }
+
+    private static MergeResult Combine(MergeResult left, MergeResult right) => new(
+        left.Added + right.Added,
+        left.Identical + right.Identical,
+        left.Conflicts + right.Conflicts,
+        left.Skipped + right.Skipped);
 }

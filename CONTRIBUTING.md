@@ -15,6 +15,7 @@ Thank you for helping improve CodexBridge. Bug reports, recovery-test results, d
 ```powershell
 dotnet test .\CodexBridge.sln -c Release
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-PublicSafety.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-ResticIntegration.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\Build-Release.ps1
 ```
 

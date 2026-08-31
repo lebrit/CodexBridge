@@ -12,6 +12,7 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 - full verified snapshot extraction and an exact dry-run before recovery;
 - conflict-safe merge: existing different files are never overwritten;
 - a durable per-file transaction journal and SHA-256-verified rollback after interruption or restart;
+- an isolated A-to-B migration lab with a real restic snapshot, full data verification, a repeated run, and conflict preservation;
 - optional WinGet inventory, safe Codex configuration, and VS Code settings when VS Code is installed;
 - no telemetry, hosted backend, copied passwords, OAuth sessions, or active Codex database;
 - reproducible GitHub Actions prereleases with tests, a public-data safety check, and SHA-256 files.
@@ -30,7 +31,10 @@ Current public binaries are unsigned. The SignPath Foundation application was no
 
 ```powershell
 winget install --id Microsoft.DotNet.SDK.10 --exact
+winget install --id restic.restic --exact
 powershell -ExecutionPolicy Bypass -File .\scripts\Build-Release.ps1
 ```
+
+The local build warns when restic is unavailable; the GitHub Actions release gate always requires the migration lab to pass.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [roadmap](docs/ROADMAP.md). Licensed under the [MIT License](LICENSE).

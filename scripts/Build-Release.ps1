@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Version = ''
+    [string]$Version = '',
+    [switch]$RequireResticIntegration
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,12 +23,22 @@ if (-not (Test-Path -LiteralPath $dotnet)) {
     throw 'dotnet SDK was not found. Install Microsoft.DotNet.SDK.10 first.'
 }
 
+$resticCommand = Get-Command restic -ErrorAction SilentlyContinue
+if (-not $resticCommand -and $RequireResticIntegration) {
+    throw 'restic is required for the migration lab but was not found.'
+}
+if (-not $resticCommand) {
+    Write-Warning 'MIGRATION_LAB_SKIPPED=restic-not-found'
+}
+
 & (Join-Path $PSScriptRoot 'Test-PublicSafety.ps1')
 
 $artifacts = Join-Path $repoRoot 'artifacts'
 $publish = Join-Path $artifacts 'publish\win-x64'
 $resolvedRepo = [IO.Path]::GetFullPath($repoRoot).TrimEnd('\') + '\'
 $resolvedArtifacts = [IO.Path]::GetFullPath($artifacts).TrimEnd('\') + '\'
+$oldMigrationLab = $env:CODEXBRIDGE_RUN_RESTIC_INTEGRATION
+$oldResticExecutable = $env:CODEXBRIDGE_RESTIC_EXECUTABLE
 if (-not $resolvedArtifacts.StartsWith($resolvedRepo, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Artifacts path escaped the repository.'
 }
@@ -40,6 +51,12 @@ Push-Location $repoRoot
 try {
     & $dotnet restore .\CodexBridge.sln
     if ($LASTEXITCODE -ne 0) { throw 'dotnet restore failed.' }
+
+    if ($resticCommand) {
+        $env:CODEXBRIDGE_RUN_RESTIC_INTEGRATION = '1'
+        $env:CODEXBRIDGE_RESTIC_EXECUTABLE = $resticCommand.Source
+        Write-Host "MIGRATION_LAB_REQUIRED=$($resticCommand.Source)"
+    }
 
     & $dotnet test .\CodexBridge.sln -c Release --no-restore --nologo
     if ($LASTEXITCODE -ne 0) { throw 'dotnet test failed.' }
@@ -69,5 +86,7 @@ try {
     Write-Host "SHA256=$hash"
 }
 finally {
+    $env:CODEXBRIDGE_RUN_RESTIC_INTEGRATION = $oldMigrationLab
+    $env:CODEXBRIDGE_RESTIC_EXECUTABLE = $oldResticExecutable
     Pop-Location
 }

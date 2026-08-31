@@ -92,7 +92,10 @@ public sealed class ProcessRunner
     }
 }
 
-public sealed class ResticService(ProcessRunner processes)
+public sealed class ResticService(
+    ProcessRunner processes,
+    string? cacheDirectory = null,
+    string? excludesFile = null)
 {
     public Task<ProcessResult> VersionAsync(string executable, CancellationToken cancellationToken = default) =>
         processes.RunAsync(executable, ["version"], cancellationToken: cancellationToken);
@@ -143,7 +146,7 @@ public sealed class ResticService(ProcessRunner processes)
 
         var arguments = new List<string> { "backup" };
         arguments.AddRange(paths);
-        arguments.AddRange(["--exclude-file", AppPaths.ExcludesFile, "--tag", "codexbridge", "--json"]);
+        arguments.AddRange(["--exclude-file", excludesFile ?? AppPaths.ExcludesFile, "--tag", "codexbridge", "--json"]);
         var result = await RunAsync(executable, repository, password, arguments, cancellationToken);
         return result.Succeeded
             ? OperationResult.Ok("Снимок создан.", LastNonEmptyLine(result.Output))
@@ -238,7 +241,7 @@ public sealed class ResticService(ProcessRunner processes)
         return processes.RunAsync(executable, allArguments, new Dictionary<string, string>
         {
             ["RESTIC_PASSWORD"] = password,
-            ["RESTIC_CACHE_DIR"] = AppPaths.ResticCacheDirectory
+            ["RESTIC_CACHE_DIR"] = cacheDirectory ?? AppPaths.ResticCacheDirectory
         }, cancellationToken);
     }
 
