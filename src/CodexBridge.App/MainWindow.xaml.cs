@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private readonly BackupToolInstaller _toolInstaller;
     private readonly ToolInventoryService _toolInventory;
     private readonly EnvironmentDiagnosticsService _environmentDiagnostics;
+    private readonly EnvironmentAutomationService _environmentAutomation;
     private readonly RestoreService _restore;
     private readonly DispatcherTimer _stateRefreshTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private ICollectionView? _projectsView;
@@ -69,6 +70,7 @@ public partial class MainWindow : Window
         _toolInstaller = new BackupToolInstaller(_processes);
         _toolInventory = new ToolInventoryService(_processes);
         _environmentDiagnostics = new EnvironmentDiagnosticsService();
+        _environmentAutomation = new EnvironmentAutomationService(_processes);
         _restore = new RestoreService(_restic, _files);
 
         VersionText.Text = "Версия " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev");
@@ -507,6 +509,59 @@ public partial class MainWindow : Window
             var report = await _environmentDiagnostics.DiagnoseAsync(_settings, cancellationToken);
             EnvironmentDiagnosticsText.Text = report.Details;
             await ShowResultAsync(OperationResult.Ok(report.Summary, report.Details));
+        });
+    }
+
+    private async void PrepareEnvironment_Click(object sender, RoutedEventArgs e)
+    {
+        var confirmation = MessageBox.Show(this,
+            "Установить отсутствующие базовые инструменты, Graphify, Codebase Memory и Ponytail официальными командами WinGet, npm, uv и Codex?\n\n"
+            + "Приложение не переносит пароли и входы. После завершения потребуется перезапустить Codex, заново войти в сервисы и отдельно подтвердить доверие к hooks Ponytail.",
+            "Безопасная автоподготовка", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        await RunBusyAsync("Подготовка среды разработки…", async cancellationToken =>
+        {
+            var result = await _environmentAutomation.PrepareAsync(_settings, cancellationToken);
+            await ShowResultAsync(result);
+            var report = await _environmentDiagnostics.DiagnoseAsync(_settings, cancellationToken);
+            EnvironmentDiagnosticsText.Text = report.Details;
+        });
+    }
+
+    private async void RebuildIndexes_Click(object sender, RoutedEventArgs e)
+    {
+        var confirmation = MessageBox.Show(this,
+            "Локально пересобрать Graphify и Codebase Memory для всех защищённых проектов с доступными папками?\n\n"
+            + "Graphify обновит папки graphify-out. Если установлен gfy, он обновит локальные Git hooks и общий локальный граф. Отправки в GitHub не будет.",
+            "Пересборка индексов", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        await RunBusyAsync("Пересборка проектных индексов…", async cancellationToken =>
+        {
+            var result = await _environmentAutomation.RebuildIndexesAsync(Projects, cancellationToken);
+            EnvironmentDiagnosticsText.Text = result.Details;
+            await ShowResultAsync(result);
+        });
+    }
+
+    private async void RebindObsidian_Click(object sender, RoutedEventArgs e)
+    {
+        var confirmation = MessageBox.Show(this,
+            "Перепривязать сохранённые Obsidian vault к однозначно найденным папкам внутри единого корня проектов?\n\n"
+            + "Obsidian должен быть закрыт. Неоднозначные совпадения останутся без изменений, а существующий реестр будет сохранён отдельной резервной копией.",
+            "Перепривязка Obsidian", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        await RunBusyAsync("Поиск и перепривязка Obsidian vault…", async cancellationToken =>
+        {
+            var result = await _environmentAutomation.RebindObsidianVaultsAsync(_settings, Projects, cancellationToken);
+            await ShowResultAsync(result);
+            var report = await _environmentDiagnostics.DiagnoseAsync(_settings, cancellationToken);
+            EnvironmentDiagnosticsText.Text = report.Details;
         });
     }
 

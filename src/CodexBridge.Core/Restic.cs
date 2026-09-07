@@ -15,7 +15,8 @@ public sealed class ProcessRunner
         string executable,
         IEnumerable<string> arguments,
         IReadOnlyDictionary<string, string>? environment = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? workingDirectory = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -23,7 +24,10 @@ public sealed class ProcessRunner
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
+                ? Environment.CurrentDirectory
+                : Path.GetFullPath(workingDirectory)
         };
 
         foreach (var argument in arguments)
@@ -57,6 +61,32 @@ public sealed class ProcessRunner
         {
             return new ProcessResult(-1, "", exception.Message);
         }
+    }
+
+    public Task<ProcessResult> RunCommandAsync(
+        string command,
+        IEnumerable<string> arguments,
+        CancellationToken cancellationToken = default,
+        string? workingDirectory = null)
+    {
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CODEXBRIDGE_CHILD_COMMAND"] = command,
+            ["CODEXBRIDGE_CHILD_ARGUMENTS"] = JsonSerializer.Serialize(arguments.ToArray())
+        };
+        const string script = """
+                              $ErrorActionPreference = 'Stop'
+                              $command = $env:CODEXBRIDGE_CHILD_COMMAND
+                              $arguments = @(ConvertFrom-Json -InputObject $env:CODEXBRIDGE_CHILD_ARGUMENTS)
+                              & $command @arguments
+                              if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }
+                              """;
+        return RunAsync(
+            "powershell.exe",
+            ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+            environment,
+            cancellationToken,
+            workingDirectory);
     }
 
     private static async Task<bool> StopProcessAsync(Process process)

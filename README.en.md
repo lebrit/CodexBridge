@@ -17,6 +17,9 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 - optional WinGet inventory, sanitized Codex configuration, global AGENTS, memories, skills, a portable Git profile, and VS Code settings when VS Code is installed;
 - an Obsidian vault registry is retained as recovery metadata without applying old machine paths;
 - a fast new-computer diagnostic checks tools, MCP, Graphify, Codebase Memory, Ponytail, and Obsidian paths without a full disk scan or exposing secrets;
+- confirmed environment preparation installs missing Graphify, Codebase Memory, and Ponytail through their official WinGet/npm/uv/Codex commands;
+- protected projects can rebuild local Graphify and Codebase Memory indexes without an automatic GitHub push;
+- Obsidian vault paths are rebound only on an unambiguous folder-name match, with the existing registry backed up first;
 - no telemetry, hosted backend, copied passwords, OAuth sessions, or active Codex database;
 - reproducible GitHub Actions prereleases with tests, a public-data safety check, and SHA-256 files.
 

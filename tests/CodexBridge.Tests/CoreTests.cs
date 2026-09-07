@@ -432,6 +432,127 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public async Task ProcessRunner_runs_command_wrappers_without_interpreting_arguments()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"), "command with spaces");
+        Directory.CreateDirectory(root);
+        var command = Path.Combine(root, "echo-argument.cmd");
+        await File.WriteAllTextAsync(command, "@echo off\r\necho \"%~1\"\r\n");
+        try
+        {
+            var result = await new ProcessRunner().RunCommandAsync(command, ["alpha & beta"]);
+
+            Assert.True(result.Succeeded, result.Combined);
+            Assert.Contains("alpha & beta", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(root)!, true);
+        }
+    }
+
+    [Fact]
+    public void GetIndexableProjects_keeps_only_unique_protected_existing_paths()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var projects = new[]
+            {
+                new ProjectEntry { Name = "One", Path = root, IsProtected = true },
+                new ProjectEntry { Name = "Duplicate", Path = root, IsProtected = true },
+                new ProjectEntry { Name = "Excluded", Path = root, IsProtected = false },
+                new ProjectEntry { Name = "Missing", Path = Path.Combine(root, "missing"), IsProtected = true }
+            };
+
+            var result = EnvironmentAutomationService.GetIndexableProjects(projects);
+
+            Assert.Single(result);
+            Assert.Equal("One", result[0].Name);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task RebindObsidianRegistry_maps_unique_vault_and_preserves_existing_entries()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var destination = Path.Combine(root, "Projects");
+        var vault = Path.Combine(destination, "VaultA");
+        var source = Path.Combine(root, "recovery", "obsidian-vaults.json");
+        var target = Path.Combine(root, "appdata", "obsidian.json");
+        Directory.CreateDirectory(Path.Combine(vault, ".obsidian"));
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        await File.WriteAllTextAsync(source, JsonSerializer.Serialize(new
+        {
+            vaults = new Dictionary<string, object>
+            {
+                ["restored"] = new { path = @"C:\OldComputer\VaultA", ts = 1 }
+            }
+        }));
+        await File.WriteAllTextAsync(target, JsonSerializer.Serialize(new
+        {
+            vaults = new Dictionary<string, object>
+            {
+                ["current"] = new { path = destination, ts = 2 }
+            }
+        }));
+        try
+        {
+            var result = await EnvironmentAutomationService.RebindObsidianRegistryAsync(
+                source, target, destination, [vault]);
+
+            Assert.True(result.Succeeded, result.Details);
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(target));
+            var vaults = document.RootElement.GetProperty("vaults");
+            Assert.Equal(vault, vaults.GetProperty("restored").GetProperty("path").GetString());
+            Assert.Equal(destination, vaults.GetProperty("current").GetProperty("path").GetString());
+            Assert.Single(Directory.GetFiles(Path.GetDirectoryName(target)!, "obsidian.codexbridge-backup-*.json"));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task RebindObsidianRegistry_leaves_ambiguous_vault_untouched()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var destination = Path.Combine(root, "Projects");
+        var first = Path.Combine(destination, "One", "VaultA");
+        var second = Path.Combine(destination, "Two", "VaultA");
+        var source = Path.Combine(root, "recovery.json");
+        var target = Path.Combine(root, "obsidian.json");
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        await File.WriteAllTextAsync(source, JsonSerializer.Serialize(new
+        {
+            vaults = new Dictionary<string, object>
+            {
+                ["restored"] = new { path = @"C:\OldComputer\VaultA" }
+            }
+        }));
+        try
+        {
+            var result = await EnvironmentAutomationService.RebindObsidianRegistryAsync(
+                source, target, destination, [first, second]);
+
+            Assert.False(result.Succeeded);
+            Assert.False(File.Exists(target));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void ErrorLog_writes_utf8_file_only_when_called()
     {
         var directory = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));

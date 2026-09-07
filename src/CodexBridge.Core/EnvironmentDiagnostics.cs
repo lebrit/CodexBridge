@@ -62,15 +62,20 @@ public sealed class EnvironmentDiagnosticsService
 
         checks.Add(CheckTool("WinGet", ["winget.exe"], [], true,
             "нужен для повторной установки приложений"));
-        checks.Add(CheckTool("restic", [settings.ResticExecutable, "restic.exe"], [], true,
+        checks.Add(CheckTool("restic", [settings.ResticExecutable, "restic.exe"],
+            [Path.Combine(localAppData, "Microsoft", "WinGet", "Links", "restic.exe")], true,
             "нужен для чтения зашифрованных снимков"));
         checks.Add(CheckTool("Git", ["git.exe"],
         [
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "cmd", "git.exe"),
             Path.Combine(localAppData, "Programs", "Git", "cmd", "git.exe")
         ], true, "после установки будет применён разрешённый Git-профиль"));
-        checks.Add(CheckTool("Codex", ["codex.exe", "codex.cmd"], [], true,
+        checks.Add(CheckTool("Codex", ["codex.exe", "codex.cmd"],
+            [Path.Combine(appData, "npm", "codex.cmd")], true,
             "после установки потребуется повторный вход"));
+        checks.Add(CheckTool("Node.js", ["node.exe"],
+            [Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe")],
+            true, "нужен для Codex CLI и hooks плагинов"));
 
         IReadOnlyList<string> mcpServers = [];
         try
@@ -87,18 +92,30 @@ public sealed class EnvironmentDiagnosticsService
             checks.Add(Required("MCP", "не удалось прочитать заголовки конфигурации: " + exception.Message));
         }
 
-        var graphify = FindExecutable(["graphify.exe", "graphify.cmd", "graphify"]);
-        var gfy = FindExecutable(["gfy.exe", "gfy.cmd", "gfy"]);
-        checks.Add(graphify is not null && gfy is not null
-            ? Required("Graphify", "CLI и gfy обнаружены; после восстановления нужно зарегистрировать проекты и обновить общий граф")
-            : Required("Graphify", "нужно установить CLI и gfy, затем обновить общий граф"));
+        var graphify = FindExecutable(["graphify.exe", "graphify.cmd", "graphify"],
+            [Path.Combine(profile, ".local", "bin", "graphify.exe")]);
+        var gfy = FindExecutable(["gfy.exe", "gfy.cmd", "gfy"],
+            [Path.Combine(profile, ".local", "bin", "gfy.cmd")]);
+        checks.Add(graphify is not null
+            ? Ready("Graphify", "CLI обнаружен; индексы проектов пересобираются отдельной кнопкой")
+            : Required("Graphify", "нужно установить CLI и затем пересобрать проектные графы"));
+        checks.Add(gfy is not null
+            ? Ready("gfy", "обёртка общего графа обнаружена")
+            : Optional("gfy", "не найден; локальные графы можно пересобрать без общей регистрации"));
 
         var hasCodebaseMemory = mcpServers.Any(name =>
             name.Contains("codebase", StringComparison.OrdinalIgnoreCase)
             || name.Contains("memory", StringComparison.OrdinalIgnoreCase));
-        checks.Add(hasCodebaseMemory
-            ? Required("Codebase Memory", "MCP-конфигурация обнаружена; проектные индексы нужно пересоздать")
-            : Required("Codebase Memory", "MCP-сервер не обнаружен; требуется установка и новая индексация"));
+        var codebaseMemory = FindExecutable(["codebase-memory-mcp.exe", "codebase-memory-mcp.cmd"],
+        [
+            Path.Combine(profile, ".local", "bin", "codebase-memory-mcp.exe"),
+            Path.Combine(appData, "npm", "codebase-memory-mcp.cmd")
+        ]);
+        checks.Add(hasCodebaseMemory && codebaseMemory is not null
+            ? Ready("Codebase Memory", "MCP и команда обнаружены; индексы пересобираются отдельной кнопкой")
+            : codebaseMemory is not null
+                ? Required("Codebase Memory", "команда найдена, но MCP нужно зарегистрировать в Codex")
+                : Required("Codebase Memory", "требуется установка, регистрация MCP и новая индексация"));
 
         var ponytailInstalled = Directory.Exists(Path.Combine(codexRoot, "plugins", "cache", "ponytail"))
                                 || Directory.Exists(Path.Combine(codexRoot, "skills", "ponytail"));
@@ -118,9 +135,11 @@ public sealed class EnvironmentDiagnosticsService
             cancellationToken));
 
         checks.Add(settings.CloudEnabled
-            ? CheckTool("rclone", ["rclone.exe"], [], true,
+            ? CheckTool("rclone", ["rclone.exe"],
+                [Path.Combine(localAppData, "Microsoft", "WinGet", "Links", "rclone.exe")], true,
                 "нужен для облачной копии; remote и вход проверяются отдельно")
-            : CheckTool("rclone", ["rclone.exe"], [], false,
+            : CheckTool("rclone", ["rclone.exe"],
+                [Path.Combine(localAppData, "Microsoft", "WinGet", "Links", "rclone.exe")], false,
                 "понадобится только при включении облачной копии"));
 
         return new EnvironmentDiagnosticReport(checks);
@@ -139,7 +158,7 @@ public sealed class EnvironmentDiagnosticsService
         return names.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static async Task<IReadOnlyList<string>> ParseMcpServerNamesAsync(
+    public static async Task<IReadOnlyList<string>> ParseMcpServerNamesAsync(
         string path,
         CancellationToken cancellationToken)
     {
@@ -237,7 +256,7 @@ public sealed class EnvironmentDiagnosticsService
         return required ? Required(name, missingMessage) : Optional(name, missingMessage);
     }
 
-    private static string? FindExecutable(
+    public static string? FindExecutable(
         IEnumerable<string> names,
         IEnumerable<string>? directCandidates = null)
     {
