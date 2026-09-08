@@ -20,6 +20,9 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 - confirmed environment preparation installs missing Graphify, Codebase Memory, and Ponytail through their official WinGet/npm/uv/Codex commands;
 - protected projects can rebuild local Graphify and Codebase Memory indexes without an automatic GitHub push;
 - Obsidian vault paths are rebound only on an unambiguous folder-name match, with the existing registry backed up first;
+- a precise WinGet recovery plan removes already-installed packages from the import and uses `--no-upgrade` as a second-run safeguard;
+- Git, Python, Node.js, and Java versions are recorded; only existing allowlisted user paths and path-valued variables can be added, while conflicting values are preserved;
+- repeated environment recovery does not reinstall applications or VS Code extensions and does not duplicate PATH or matching Git settings;
 - no telemetry, hosted backend, copied passwords, OAuth sessions, or active Codex database;
 - reproducible GitHub Actions prereleases with tests, a public-data safety check, and SHA-256 files.
 
@@ -33,7 +36,7 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 
 Current public binaries are unsigned. The SignPath Foundation application was not approved because this new project does not yet meet the program's external visibility requirements. See [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
 
-Before each snapshot, CodexBridge creates a separate portable `config.toml`. MCP environment/header values and settings whose names indicate tokens, passwords, credentials, or secrets are omitted. Git restore uses a small allowlist and never imports credential helpers, signing keys, URL rewrites, or HTTP headers.
+Before each snapshot, CodexBridge creates a separate portable `config.toml`. MCP environment/header values and settings whose names indicate tokens, passwords, credentials, or secrets are omitted. Git restore uses a small allowlist and never imports credential helpers, signing keys, URL rewrites, or HTTP headers. User PATH entries and allowlisted path-valued variables are retained only for existing directories under known user or program roots, which are replaced with portable tokens.
 
 ## Build
 

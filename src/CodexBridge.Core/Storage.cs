@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace CodexBridge.Core;
@@ -23,6 +24,7 @@ public static class AppPaths
     public static string VsCodeExtensionsFile => Path.Combine(DataDirectory, "vscode-extensions.txt");
     public static string PortableCodexConfigFile => Path.Combine(DataDirectory, "codex-config-portable.toml");
     public static string GitProfileFile => Path.Combine(DataDirectory, "git-profile.json");
+    public static string PortableEnvironmentProfileFile => Path.Combine(DataDirectory, "environment-profile.json");
     public static string BackupLockFile => Path.Combine(DataDirectory, "backup.lock");
 
     public static void EnsureCreated()
@@ -204,7 +206,7 @@ public static class BackupFiles
     [
         "повторный вход в Codex, GitHub и облачные сервисы",
         "повторная настройка секретов и переменных окружения MCP",
-        "переустановка Graphify, Codebase Memory и других машинных инструментов",
+        "перезапуск Codex после установки инструментов и отдельное доверие к hooks Ponytail",
         "выбор нового пути Obsidian vault, если он не входит в защищаемый проект"
     ];
 
@@ -229,6 +231,7 @@ public static class BackupFiles
             Item("User agent skills", Path.Combine(profile, ".agents", "skills"), "{UserProfile}\\.agents\\skills"),
             Item("WinGet app inventory", AppPaths.AppInventoryFile, "{UserProfile}\\CodexBridge-Recovery\\winget-packages.json"),
             Item("Portable Git profile", AppPaths.GitProfileFile, "{UserProfile}\\CodexBridge-Recovery\\git-profile.json"),
+            Item("Portable environment profile", AppPaths.PortableEnvironmentProfileFile, "{UserProfile}\\CodexBridge-Recovery\\environment-profile.json"),
             Item("Obsidian vault registry", Path.Combine(appData, "obsidian", "obsidian.json"), "{UserProfile}\\CodexBridge-Recovery\\obsidian-vaults.json")
         };
 
@@ -256,6 +259,11 @@ public static class BackupFiles
 
 public sealed class ToolInventoryService(ProcessRunner processes)
 {
+    private RestorePreviewData? cachedRestorePreview;
+    private DateTime cachedInventoryWriteUtc;
+    private DateTime cachedEnvironmentWriteUtc;
+    private DateTimeOffset cachedRestorePreviewUtc;
+
     private static readonly string[] PortableGitKeys =
     [
         "user.name",
@@ -273,6 +281,17 @@ public sealed class ToolInventoryService(ProcessRunner processes)
         "token", "secret", "password", "api_key", "api-key",
         "authorization", "bearer", "credential", "header"
     ];
+
+    private static readonly string[] PortableEnvironmentVariables =
+    [
+        "JAVA_HOME",
+        "GOPATH",
+        "GOBIN",
+        "NPM_CONFIG_PREFIX",
+        "PYTHONUSERBASE"
+    ];
+
+    private const int MaximumUserEnvironmentValueLength = 2047;
 
     public static string? FindVsCodeExecutable()
     {
@@ -353,11 +372,214 @@ public sealed class ToolInventoryService(ProcessRunner processes)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+    public static string GetExtensionId(string extension)
+    {
+        var separator = extension.LastIndexOf('@');
+        return separator > 0 ? extension[..separator] : extension;
+    }
+
+    public static WingetInventoryPlan BuildWingetInventoryPlan(
+        string inventoryJson,
+        IEnumerable<string> installedPackageIds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(inventoryJson);
+        var root = JsonNode.Parse(inventoryJson) as JsonObject
+                   ?? throw new InvalidDataException("Файл WinGet не содержит JSON-объект.");
+        var sources = root["Sources"] as JsonArray
+                      ?? throw new InvalidDataException("В файле WinGet отсутствует массив Sources.");
+        var installed = new HashSet<string>(installedPackageIds, StringComparer.OrdinalIgnoreCase);
+        var requested = new List<string>();
+        var alreadyInstalled = new List<string>();
+        var pending = new List<string>();
+
+        foreach (var source in sources.OfType<JsonObject>())
+        {
+            if (source["Packages"] is not JsonArray packages)
+                continue;
+
+            for (var index = packages.Count - 1; index >= 0; index--)
+            {
+                if (packages[index] is not JsonObject package
+                    || package["PackageIdentifier"] is not JsonValue identifier
+                    || !identifier.TryGetValue<string>(out var packageId)
+                    || string.IsNullOrWhiteSpace(packageId))
+                {
+                    throw new InvalidDataException("Файл WinGet содержит пакет без PackageIdentifier.");
+                }
+
+                requested.Add(packageId);
+                if (installed.Contains(packageId))
+                {
+                    alreadyInstalled.Add(packageId);
+                    packages.RemoveAt(index);
+                }
+                else
+                {
+                    pending.Add(packageId);
+                }
+            }
+        }
+
+        return new WingetInventoryPlan(
+            root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+            requested.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList(),
+            alreadyInstalled.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList(),
+            pending.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList());
+    }
+
+    public static string? TokenizePortablePath(
+        string? value,
+        IReadOnlyDictionary<string, string>? roots = null,
+        Func<string, bool>? directoryExists = null)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        roots ??= CreatePortablePathRoots();
+        directoryExists ??= Directory.Exists;
+        try
+        {
+            var expanded = Environment.ExpandEnvironmentVariables(value.Trim().Trim('"'));
+            if (!Path.IsPathFullyQualified(expanded))
+                return null;
+
+            var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(expanded));
+            if (!directoryExists(fullPath))
+                return null;
+
+            foreach (var root in roots.OrderByDescending(item => item.Value.Length))
+            {
+                var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root.Value));
+                if (!PathsEqual(fullPath, fullRoot) && !PathPolicy.IsInside(fullPath, fullRoot))
+                    continue;
+
+                var relative = Path.GetRelativePath(fullRoot, fullPath);
+                return relative == "." ? root.Key : root.Key + "\\" + relative;
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    public static string? ResolvePortablePathToken(
+        string? token,
+        IReadOnlyDictionary<string, string>? roots = null,
+        Func<string, bool>? directoryExists = null)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        roots ??= CreatePortablePathRoots();
+        directoryExists ??= Directory.Exists;
+        try
+        {
+            foreach (var root in roots)
+            {
+                if (!token.Equals(root.Key, StringComparison.OrdinalIgnoreCase)
+                    && !token.StartsWith(root.Key + "\\", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var relative = token.Length == root.Key.Length ? "" : token[(root.Key.Length + 1)..];
+                var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root.Value));
+                var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(fullRoot, relative)));
+                if ((!PathsEqual(fullPath, fullRoot) && !PathPolicy.IsInside(fullPath, fullRoot))
+                    || !directoryExists(fullPath))
+                {
+                    return null;
+                }
+
+                return fullPath;
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    public static PortableEnvironmentPlan BuildPortableEnvironmentPlan(
+        PortableEnvironmentProfile profile,
+        string? currentUserPath,
+        IReadOnlyDictionary<string, string?>? currentUserVariables = null,
+        IReadOnlyDictionary<string, string>? roots = null,
+        Func<string, bool>? directoryExists = null)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        roots ??= CreatePortablePathRoots();
+        directoryExists ??= Directory.Exists;
+        currentUserVariables ??= PortableEnvironmentVariables.ToDictionary(
+            name => name,
+            name => Environment.GetEnvironmentVariable(name, EnvironmentVariableTarget.User),
+            StringComparer.OrdinalIgnoreCase);
+
+        var currentPaths = (currentUserPath ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(NormalizePath)
+            .Where(path => path is not null)
+            .Cast<string>()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pathsToAdd = new List<string>();
+        var existingPaths = 0;
+        var rejected = new List<string>();
+
+        foreach (var token in (profile.UserPathEntries ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var resolved = ResolvePortablePathToken(token, roots, directoryExists);
+            if (resolved is null)
+            {
+                rejected.Add("PATH: " + token);
+                continue;
+            }
+
+            if (currentPaths.Contains(resolved))
+                existingPaths++;
+            else
+            {
+                pathsToAdd.Add(resolved);
+                currentPaths.Add(resolved);
+            }
+        }
+
+        var variablesToAdd = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var conflicts = new List<string>();
+        foreach (var variable in profile.UserVariables ?? new Dictionary<string, string>())
+        {
+            if (!PortableEnvironmentVariables.Contains(variable.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                rejected.Add("переменная: " + variable.Key);
+                continue;
+            }
+
+            var resolved = ResolvePortablePathToken(variable.Value, roots, directoryExists);
+            if (resolved is null)
+            {
+                rejected.Add(variable.Key + ": " + variable.Value);
+                continue;
+            }
+
+            currentUserVariables.TryGetValue(variable.Key, out var currentValue);
+            if (string.IsNullOrWhiteSpace(currentValue))
+                variablesToAdd[variable.Key] = resolved;
+            else if (!PathsEqual(NormalizePath(currentValue), resolved))
+                conflicts.Add(variable.Key);
+        }
+
+        return new PortableEnvironmentPlan(pathsToAdd, existingPaths, variablesToAdd, conflicts, rejected);
+    }
+
     public async Task<OperationResult> CaptureAsync(bool includeVsCode, CancellationToken cancellationToken = default)
     {
+        cachedRestorePreview = null;
         AppPaths.EnsureCreated();
         var codex = await CaptureCodexConfigAsync(cancellationToken);
         var gitProfile = await CaptureGitProfileAsync(cancellationToken);
+        var environmentProfile = await CaptureEnvironmentProfileAsync(cancellationToken);
         var winget = await processes.RunAsync("winget.exe",
         [
             "export", "--output", AppPaths.AppInventoryFile, "--include-versions",
@@ -383,7 +605,7 @@ public sealed class ToolInventoryService(ProcessRunner processes)
             }
         }
 
-        var results = new[] { codex, gitProfile, winget.Succeeded
+        var results = new[] { codex, gitProfile, environmentProfile, winget.Succeeded
             ? OperationResult.Ok("Список программ WinGet обновлён.")
             : OperationResult.Fail("Не удалось обновить список программ WinGet.", winget.Combined), vsCode }
             .Where(result => result is not null)
@@ -399,30 +621,385 @@ public sealed class ToolInventoryService(ProcessRunner processes)
 
     public async Task<OperationResult> InstallAppsAsync(bool includeVsCode, CancellationToken cancellationToken = default)
     {
-        var inventory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "CodexBridge-Recovery", "winget-packages.json");
-        if (!File.Exists(inventory))
-            return OperationResult.Fail("Восстановленный список WinGet не найден.", inventory);
+        RestorePreviewData preview;
+        try
+        {
+            preview = await BuildRestorePreviewAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        {
+            return OperationResult.Fail("Не удалось подготовить безопасный план восстановления приложений.", exception.Message);
+        }
 
-        var result = await processes.RunAsync("winget.exe",
-        [
-            "import", "--import-file", inventory, "--ignore-unavailable",
-            "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"
-        ], cancellationToken: cancellationToken);
+        ProcessResult? wingetResult = null;
+        if (preview.Winget.PendingPackageIds.Count > 0)
+        {
+            var pendingInventory = Path.Combine(AppPaths.DataDirectory, $"winget-pending-{Guid.NewGuid():N}.json");
+            try
+            {
+                await File.WriteAllTextAsync(
+                    pendingInventory, preview.Winget.PendingInventoryJson, new UTF8Encoding(false), cancellationToken);
+                wingetResult = await processes.RunAsync("winget.exe",
+                [
+                    "import", "--import-file", pendingInventory, "--ignore-unavailable", "--no-upgrade",
+                    "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"
+                ], cancellationToken: cancellationToken);
+            }
+            finally
+            {
+                File.Delete(pendingInventory);
+            }
+        }
 
+        var winget = wingetResult is null
+            ? OperationResult.Ok("Все приложения WinGet уже установлены; импорт пропущен.")
+            : wingetResult.Succeeded
+                ? OperationResult.Ok($"Установлены недостающие приложения WinGet: {preview.Winget.PendingPackageIds.Count}.", wingetResult.Combined)
+                : OperationResult.Fail("Некоторые приложения WinGet установить не удалось.", wingetResult.Combined);
         var vsCode = includeVsCode ? await InstallVsCodeExtensionsAsync(cancellationToken) : null;
         var gitProfile = await ApplyGitProfileAsync(cancellationToken);
-        var succeeded = result.Succeeded && (vsCode?.Succeeded ?? true) && gitProfile.Succeeded;
+        var environmentProfile = await ApplyEnvironmentProfileAsync(cancellationToken);
+        var succeeded = winget.Succeeded && (vsCode?.Succeeded ?? true) && gitProfile.Succeeded && environmentProfile.Succeeded;
         var message = succeeded
             ? includeVsCode
-                ? "Установка приложений, расширений VS Code и Git-профиля завершена."
-                : "Установка приложений и Git-профиля завершена."
+                ? "Приложения, расширения VS Code и переносимый профиль среды применены."
+                : "Приложения и переносимый профиль среды применены."
             : "Некоторые приложения или настройки среды применить не удалось.";
         var details = string.Join(Environment.NewLine,
-            new[] { result.Combined, vsCode?.Details, vsCode?.Message, gitProfile.Details, gitProfile.Message }
+            new[]
+            {
+                FormatRestorePreview(preview), winget.Message, winget.Details,
+                vsCode?.Message, vsCode?.Details, gitProfile.Message, gitProfile.Details,
+                environmentProfile.Message, environmentProfile.Details
+            }
             .Where(value => !string.IsNullOrWhiteSpace(value)));
+        cachedRestorePreview = null;
         return succeeded ? OperationResult.Ok(message, details) : OperationResult.Fail(message, details);
+    }
+
+    public async Task<OperationResult> PreviewRestoreAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var preview = await BuildRestorePreviewAsync(cancellationToken);
+            var installed = preview.InstalledInventoryKnown
+                ? preview.Winget.InstalledPackageIds.Count.ToString()
+                : "не определено";
+            return OperationResult.Ok(
+                $"К установке: {preview.Winget.PendingPackageIds.Count}; уже установлено: {installed}.",
+                FormatRestorePreview(preview));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        {
+            return OperationResult.Fail("Не удалось проверить план восстановления приложений.", exception.Message);
+        }
+    }
+
+    private async Task<OperationResult> CaptureEnvironmentProfileAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            File.Delete(AppPaths.PortableEnvironmentProfileFile);
+            var profile = new PortableEnvironmentProfile
+            {
+                CapturedUtc = DateTimeOffset.UtcNow,
+                Runtimes = await ProbeRuntimeVersionsAsync(cancellationToken)
+            };
+
+            var userPath = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User) ?? "";
+            profile.UserPathEntries = userPath
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(path => TokenizePortablePath(path))
+                .Where(path => path is not null)
+                .Cast<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var name in PortableEnvironmentVariables)
+            {
+                var token = TokenizePortablePath(
+                    Environment.GetEnvironmentVariable(name, EnvironmentVariableTarget.User));
+                if (token is not null)
+                    profile.UserVariables[name] = token;
+            }
+
+            await new JsonFileStore().SaveAsync(AppPaths.PortableEnvironmentProfileFile, profile, cancellationToken);
+            var versions = string.Join(Environment.NewLine,
+                profile.Runtimes.Select(runtime => $"{runtime.Name}: {DisplayVersion(runtime.Version)}"));
+            return OperationResult.Ok(
+                $"Профиль PATH и версий готов: путей {profile.UserPathEntries.Count}, переменных {profile.UserVariables.Count}.",
+                versions);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return OperationResult.Fail("Не удалось подготовить профиль PATH и версий.", exception.Message);
+        }
+    }
+
+    private async Task<RestorePreviewData> BuildRestorePreviewAsync(CancellationToken cancellationToken)
+    {
+        var inventory = RecoveryPath("winget-packages.json");
+        if (!File.Exists(inventory))
+            throw new FileNotFoundException("Восстановленный список WinGet не найден.", inventory);
+
+        var profilePath = RecoveryPath("environment-profile.json");
+        var inventoryWriteUtc = File.GetLastWriteTimeUtc(inventory);
+        var environmentWriteUtc = File.Exists(profilePath) ? File.GetLastWriteTimeUtc(profilePath) : DateTime.MinValue;
+        if (cachedRestorePreview is not null
+            && inventoryWriteUtc == cachedInventoryWriteUtc
+            && environmentWriteUtc == cachedEnvironmentWriteUtc
+            && DateTimeOffset.UtcNow - cachedRestorePreviewUtc < TimeSpan.FromMinutes(2))
+        {
+            return cachedRestorePreview;
+        }
+
+        var inventoryJson = await File.ReadAllTextAsync(inventory, cancellationToken);
+        _ = BuildWingetInventoryPlan(inventoryJson, []);
+        var installed = await CaptureInstalledWingetPackageIdsAsync(cancellationToken);
+        var winget = BuildWingetInventoryPlan(inventoryJson, installed.PackageIds);
+
+        PortableEnvironmentProfile? profile = null;
+        PortableEnvironmentPlan? environmentPlan = null;
+        if (File.Exists(profilePath))
+        {
+            profile = await new JsonFileStore().LoadAsync(
+                profilePath, () => new PortableEnvironmentProfile(), cancellationToken);
+            if (profile.SchemaVersion != 1)
+                throw new InvalidDataException($"Неподдерживаемая версия профиля среды: {profile.SchemaVersion}.");
+
+            environmentPlan = BuildPortableEnvironmentPlan(
+                profile,
+                Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User));
+        }
+
+        var preview = new RestorePreviewData(
+            winget,
+            installed.InventoryKnown,
+            installed.Warning,
+            profile,
+            environmentPlan,
+            await ProbeRuntimeVersionsAsync(cancellationToken));
+        cachedRestorePreview = preview;
+        cachedInventoryWriteUtc = inventoryWriteUtc;
+        cachedEnvironmentWriteUtc = environmentWriteUtc;
+        cachedRestorePreviewUtc = DateTimeOffset.UtcNow;
+        return preview;
+    }
+
+    private async Task<(IReadOnlyList<string> PackageIds, bool InventoryKnown, string Warning)>
+        CaptureInstalledWingetPackageIdsAsync(CancellationToken cancellationToken)
+    {
+        AppPaths.EnsureCreated();
+        var currentInventory = Path.Combine(AppPaths.DataDirectory, $"winget-current-{Guid.NewGuid():N}.json");
+        try
+        {
+            var export = await processes.RunAsync("winget.exe",
+            [
+                "export", "--output", currentInventory, "--include-versions",
+                "--accept-source-agreements", "--disable-interactivity"
+            ], cancellationToken: cancellationToken);
+            if (!export.Succeeded || !File.Exists(currentInventory))
+            {
+                return ([], false,
+                    "Текущий список WinGet получить не удалось. Импорт останется безопасным благодаря --no-upgrade.");
+            }
+
+            try
+            {
+                var json = await File.ReadAllTextAsync(currentInventory, cancellationToken);
+                var parsed = BuildWingetInventoryPlan(json, []);
+                return (parsed.RequestedPackageIds, true, "");
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidDataException)
+            {
+                return ([], false,
+                    "Текущий список WinGet не удалось разобрать: " + exception.Message
+                    + " Импорт останется безопасным благодаря --no-upgrade.");
+            }
+        }
+        finally
+        {
+            File.Delete(currentInventory);
+        }
+    }
+
+    private async Task<List<RuntimeVersionInfo>> ProbeRuntimeVersionsAsync(CancellationToken cancellationToken)
+    {
+        var python = EnvironmentDiagnosticsService.FindExecutable(["py.exe"]);
+        var probes = new (string Name, string? Executable, string[] Arguments)[]
+        {
+            ("Git", FindGitExecutable(), ["--version"]),
+            ("Python", python ?? EnvironmentDiagnosticsService.FindExecutable(["python.exe", "python3.exe"]),
+                python is null ? ["--version"] : ["-V"]),
+            ("Node.js", EnvironmentDiagnosticsService.FindExecutable(["node.exe", "node"]), ["--version"]),
+            ("Java", EnvironmentDiagnosticsService.FindExecutable(["java.exe", "java"]), ["-version"])
+        };
+        var result = new List<RuntimeVersionInfo>();
+        foreach (var probe in probes)
+        {
+            var version = "";
+            if (probe.Executable is not null)
+            {
+                var process = await processes.RunAsync(
+                    probe.Executable, probe.Arguments, cancellationToken: cancellationToken);
+                version = FirstNonEmptyLine(process.Combined);
+            }
+
+            result.Add(new RuntimeVersionInfo { Name = probe.Name, Version = version });
+        }
+
+        return result;
+    }
+
+    private async Task<OperationResult> ApplyEnvironmentProfileAsync(CancellationToken cancellationToken)
+    {
+        var path = RecoveryPath("environment-profile.json");
+        if (!File.Exists(path))
+            return OperationResult.Ok("Профиль PATH отсутствует; шаг пропущен.");
+
+        try
+        {
+            var profile = await new JsonFileStore().LoadAsync(
+                path, () => new PortableEnvironmentProfile(), cancellationToken);
+            if (profile.SchemaVersion != 1)
+                return OperationResult.Fail($"Неподдерживаемая версия профиля PATH: {profile.SchemaVersion}.");
+
+            var currentUserPath = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.User) ?? "";
+            var currentVariables = PortableEnvironmentVariables.ToDictionary(
+                name => name,
+                name => Environment.GetEnvironmentVariable(name, EnvironmentVariableTarget.User),
+                StringComparer.OrdinalIgnoreCase);
+            var plan = BuildPortableEnvironmentPlan(profile, currentUserPath, currentVariables);
+
+            var pathParts = currentUserPath
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+            var pathsApplied = 0;
+            var pathsTooLong = 0;
+            foreach (var item in plan.PathEntriesToAdd)
+            {
+                var candidate = string.Join(Path.PathSeparator, pathParts.Append(item));
+                if (candidate.Length > MaximumUserEnvironmentValueLength)
+                {
+                    pathsTooLong++;
+                    continue;
+                }
+
+                pathParts.Add(item);
+                pathsApplied++;
+            }
+
+            var appliedVariables = new List<string>();
+            try
+            {
+                if (pathsApplied > 0)
+                    Environment.SetEnvironmentVariable(
+                        "Path", string.Join(Path.PathSeparator, pathParts), EnvironmentVariableTarget.User);
+                foreach (var variable in plan.VariablesToAdd)
+                {
+                    Environment.SetEnvironmentVariable(variable.Key, variable.Value, EnvironmentVariableTarget.User);
+                    appliedVariables.Add(variable.Key);
+                }
+            }
+            catch (Exception applyException) when (applyException is UnauthorizedAccessException
+                                                             or ArgumentException
+                                                             or System.Security.SecurityException)
+            {
+                var rollbackFailures = new List<string>();
+                try
+                {
+                    if (pathsApplied > 0)
+                        Environment.SetEnvironmentVariable("Path", currentUserPath, EnvironmentVariableTarget.User);
+                }
+                catch (Exception rollbackException)
+                {
+                    rollbackFailures.Add("PATH: " + rollbackException.Message);
+                }
+
+                foreach (var name in appliedVariables)
+                {
+                    try
+                    {
+                        Environment.SetEnvironmentVariable(name, null, EnvironmentVariableTarget.User);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        rollbackFailures.Add(name + ": " + rollbackException.Message);
+                    }
+                }
+
+                var rollback = rollbackFailures.Count == 0
+                    ? "Применённые в этой операции изменения отменены."
+                    : "Ошибки отката: " + string.Join("; ", rollbackFailures);
+                return OperationResult.Fail("Не удалось применить переносимый профиль PATH.",
+                    applyException.Message + Environment.NewLine + rollback);
+            }
+
+            var details = new List<string>();
+            if (plan.VariableConflicts.Count > 0)
+                details.Add("Сохранены существующие отличающиеся переменные: " + string.Join(", ", plan.VariableConflicts));
+            if (plan.RejectedOrMissingEntries.Count > 0)
+                details.Add("Пропущены небезопасные или отсутствующие пути: " + string.Join(", ", plan.RejectedOrMissingEntries));
+            if (pathsTooLong > 0)
+                details.Add($"Не добавлено путей из-за безопасного ограничения длины PATH: {pathsTooLong}.");
+            if (pathsApplied > 0 || plan.VariablesToAdd.Count > 0)
+                details.Add("Новые значения появятся в приложениях, запущенных после этой операции.");
+
+            return OperationResult.Ok(
+                $"PATH: добавлено {pathsApplied}, уже было {plan.ExistingPathEntries}; переменных добавлено {plan.VariablesToAdd.Count}.",
+                string.Join(Environment.NewLine, details));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException
+                                                   or ArgumentException or System.Security.SecurityException)
+        {
+            return OperationResult.Fail("Не удалось применить переносимый профиль PATH.", exception.Message);
+        }
+    }
+
+    private static string FormatRestorePreview(RestorePreviewData preview)
+    {
+        var installed = preview.InstalledInventoryKnown
+            ? preview.Winget.InstalledPackageIds.Count.ToString()
+            : "не определено";
+        var lines = new List<string>
+        {
+            $"WinGet: всего {preview.Winget.RequestedPackageIds.Count}; уже установлено {installed}; к установке {preview.Winget.PendingPackageIds.Count}."
+        };
+        if (!preview.InstalledInventoryKnown && !string.IsNullOrWhiteSpace(preview.Warning))
+            lines.Add(preview.Warning);
+        if (preview.Winget.PendingPackageIds.Count > 0)
+        {
+            var shown = string.Join(", ", preview.Winget.PendingPackageIds.Take(12));
+            var suffix = preview.Winget.PendingPackageIds.Count > 12 ? " …" : "";
+            lines.Add("Будут установлены: " + shown + suffix);
+        }
+
+        if (preview.EnvironmentPlan is not null)
+        {
+            lines.Add(
+                $"PATH: добавить {preview.EnvironmentPlan.PathEntriesToAdd.Count}; уже есть {preview.EnvironmentPlan.ExistingPathEntries}; "
+                + $"переменных добавить {preview.EnvironmentPlan.VariablesToAdd.Count}; конфликтов {preview.EnvironmentPlan.VariableConflicts.Count}.");
+            if (preview.EnvironmentPlan.RejectedOrMissingEntries.Count > 0)
+                lines.Add("Недоступные или отклонённые пути: " + string.Join(", ", preview.EnvironmentPlan.RejectedOrMissingEntries));
+        }
+        else
+        {
+            lines.Add("Профиль PATH в восстановленных данных отсутствует.");
+        }
+
+        if (preview.EnvironmentProfile is not null)
+        {
+            lines.Add("Версии среды (сохранено → сейчас):");
+            foreach (var captured in preview.EnvironmentProfile.Runtimes)
+            {
+                var current = preview.CurrentRuntimes.FirstOrDefault(
+                    item => item.Name.Equals(captured.Name, StringComparison.OrdinalIgnoreCase));
+                lines.Add($"  {captured.Name}: {DisplayVersion(captured.Version)} → {DisplayVersion(current?.Version)}");
+            }
+        }
+
+        lines.Add("Уже установленные приложения и существующие отличающиеся переменные изменяться не будут.");
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static async Task<OperationResult> CaptureCodexConfigAsync(CancellationToken cancellationToken)
@@ -502,6 +1079,7 @@ public sealed class ToolInventoryService(ProcessRunner processes)
         }
 
         var applied = 0;
+        var unchanged = 0;
         var rejected = 0;
         var failures = new List<string>();
         foreach (var setting in profile.Settings ?? new Dictionary<string, string>())
@@ -509,6 +1087,19 @@ public sealed class ToolInventoryService(ProcessRunner processes)
             if (!IsPortableGitKey(setting.Key) || !IsPortableGitValue(setting.Value))
             {
                 rejected++;
+                continue;
+            }
+
+            var current = await processes.RunAsync(
+                executable, ["config", "--global", "--get", setting.Key], cancellationToken: cancellationToken);
+            if (current.Succeeded && current.Output.Trim().Equals(setting.Value, StringComparison.Ordinal))
+            {
+                unchanged++;
+                continue;
+            }
+            if (!current.Succeeded && current.ExitCode != 1)
+            {
+                failures.Add(setting.Key + " (чтение)");
                 continue;
             }
 
@@ -521,7 +1112,7 @@ public sealed class ToolInventoryService(ProcessRunner processes)
                 failures.Add(setting.Key);
         }
 
-        var summary = $"Применено Git-настроек: {applied}; отклонено небезопасных: {rejected}.";
+        var summary = $"Git-настройки: изменено {applied}; уже совпадало {unchanged}; отклонено небезопасных {rejected}.";
         return failures.Count == 0
             ? OperationResult.Ok(summary)
             : OperationResult.Fail(summary, "Ошибки: " + string.Join(", ", failures));
@@ -545,16 +1136,89 @@ public sealed class ToolInventoryService(ProcessRunner processes)
             return OperationResult.Fail("VS Code не установлен; расширения не восстановлены.");
 
         var extensions = ParseExtensions(await File.ReadAllTextAsync(inventory, cancellationToken));
+        var current = await processes.RunAsync(
+            executable, ["--list-extensions", "--show-versions"], cancellationToken: cancellationToken);
+        var installedIds = current.Succeeded
+            ? ParseExtensions(current.Output).Select(GetExtensionId).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = extensions
+            .Where(extension => !installedIds.Contains(GetExtensionId(extension)))
+            .ToList();
         var failures = new List<string>();
-        foreach (var extension in extensions)
+        foreach (var extension in pending)
         {
-            var result = await processes.RunAsync(executable, ["--install-extension", extension, "--force"], cancellationToken: cancellationToken);
+            var result = await processes.RunAsync(
+                executable, ["--install-extension", extension], cancellationToken: cancellationToken);
             if (!result.Succeeded)
                 failures.Add(extension);
         }
 
         return failures.Count == 0
-            ? OperationResult.Ok($"Установлено расширений VS Code: {extensions.Count}.")
+            ? OperationResult.Ok($"Расширения VS Code: установлено {pending.Count}, уже было {extensions.Count - pending.Count}.",
+                current.Succeeded ? "" : "Текущий список расширений прочитать не удалось; установка выполнена без --force.")
             : OperationResult.Fail($"Не установлено расширений VS Code: {failures.Count}.", string.Join(Environment.NewLine, failures));
     }
+
+    private static Dictionary<string, string> CreatePortablePathRoots()
+    {
+        var roots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        AddRoot(roots, "{LocalAppData}", Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        AddRoot(roots, "{AppData}", Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+        AddRoot(roots, "{ProgramFilesX86}", Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86));
+        AddRoot(roots, "{ProgramFiles}", Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+        AddRoot(roots, "{UserProfile}", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        return roots;
+    }
+
+    private static void AddRoot(IDictionary<string, string> roots, string token, string path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+            roots[token] = Path.GetFullPath(path);
+    }
+
+    private static string? NormalizePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        try
+        {
+            var expanded = Environment.ExpandEnvironmentVariables(value.Trim().Trim('"'));
+            return Path.IsPathFullyQualified(expanded)
+                ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(expanded))
+                : null;
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    private static bool PathsEqual(string? left, string? right) =>
+        left is not null && right is not null
+        && Path.TrimEndingDirectorySeparator(left).Equals(
+            Path.TrimEndingDirectorySeparator(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string FirstNonEmptyLine(string? value)
+    {
+        var line = (value ?? "")
+            .ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() ?? "";
+        var safe = new string(line.Where(character => !char.IsControl(character)).ToArray()).Trim();
+        return safe.Length <= 240 ? safe : safe[..240];
+    }
+
+    private static string DisplayVersion(string? version) =>
+        string.IsNullOrWhiteSpace(version) ? "не обнаружен" : version;
+
+    private static string RecoveryPath(string fileName) => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "CodexBridge-Recovery", fileName);
+
+    private sealed record RestorePreviewData(
+        WingetInventoryPlan Winget,
+        bool InstalledInventoryKnown,
+        string Warning,
+        PortableEnvironmentProfile? EnvironmentProfile,
+        PortableEnvironmentPlan? EnvironmentPlan,
+        IReadOnlyList<RuntimeVersionInfo> CurrentRuntimes);
 }

@@ -335,6 +335,111 @@ public sealed class CoreTests
         var result = ToolInventoryService.ParseExtensions("publisher.one@1.0\r\n# note\r\n\r\nPublisher.One@1.0\r\npublisher.two");
 
         Assert.Equal(["publisher.one@1.0", "publisher.two"], result, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("publisher.one", ToolInventoryService.GetExtensionId("publisher.one@1.0"));
+        Assert.Equal("publisher.two", ToolInventoryService.GetExtensionId("publisher.two"));
+    }
+
+    [Fact]
+    public void Winget_plan_removes_already_installed_packages()
+    {
+        const string inventory = """
+                                 {
+                                   "$schema": "https://aka.ms/winget-packages.schema.2.0.json",
+                                   "Sources": [
+                                     {
+                                       "Packages": [
+                                         { "PackageIdentifier": "Git.Git", "Version": "2.50.0" },
+                                         { "PackageIdentifier": "OpenJS.NodeJS.LTS", "Version": "22.0.0" }
+                                       ],
+                                       "SourceDetails": { "Name": "winget", "Identifier": "test" }
+                                     }
+                                   ]
+                                 }
+                                 """;
+
+        var plan = ToolInventoryService.BuildWingetInventoryPlan(inventory, ["git.git"]);
+        var filtered = ToolInventoryService.BuildWingetInventoryPlan(plan.PendingInventoryJson, []);
+
+        Assert.Equal(["Git.Git", "OpenJS.NodeJS.LTS"], plan.RequestedPackageIds);
+        Assert.Equal(["Git.Git"], plan.InstalledPackageIds);
+        Assert.Equal(["OpenJS.NodeJS.LTS"], plan.PendingPackageIds);
+        Assert.Equal(["OpenJS.NodeJS.LTS"], filtered.RequestedPackageIds);
+    }
+
+    [Fact]
+    public void Portable_path_tokens_cannot_escape_allowed_roots()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var bin = Path.Combine(root, "Tools", "bin");
+        var outside = Path.Combine(Path.GetDirectoryName(root)!, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(bin);
+        Directory.CreateDirectory(outside);
+        var roots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["{UserProfile}"] = root
+        };
+        try
+        {
+            var token = ToolInventoryService.TokenizePortablePath(bin, roots);
+
+            Assert.Equal(@"{UserProfile}\Tools\bin", token);
+            Assert.Equal(bin, ToolInventoryService.ResolvePortablePathToken(token, roots), ignoreCase: true);
+            Assert.Null(ToolInventoryService.ResolvePortablePathToken(
+                @"{UserProfile}\..\" + Path.GetFileName(outside), roots));
+            Assert.Null(ToolInventoryService.ResolvePortablePathToken(@"{Unknown}\Tools", roots));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+            Directory.Delete(outside, true);
+        }
+    }
+
+    [Fact]
+    public void Portable_environment_plan_is_empty_on_second_run_and_preserves_conflicts()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var bin = Path.Combine(root, "Tools", "bin");
+        var jdk = Path.Combine(root, "Java", "jdk");
+        var otherJdk = Path.Combine(root, "Java", "other");
+        Directory.CreateDirectory(bin);
+        Directory.CreateDirectory(jdk);
+        Directory.CreateDirectory(otherJdk);
+        var roots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["{UserProfile}"] = root
+        };
+        var profile = new PortableEnvironmentProfile
+        {
+            UserPathEntries = [@"{UserProfile}\Tools\bin"],
+            UserVariables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["JAVA_HOME"] = @"{UserProfile}\Java\jdk",
+                ["API_TOKEN"] = @"{UserProfile}\Java\jdk"
+            }
+        };
+        try
+        {
+            var firstRun = ToolInventoryService.BuildPortableEnvironmentPlan(
+                profile, "", new Dictionary<string, string?>(), roots);
+            var secondRun = ToolInventoryService.BuildPortableEnvironmentPlan(
+                profile, bin, new Dictionary<string, string?> { ["JAVA_HOME"] = jdk }, roots);
+            var conflict = ToolInventoryService.BuildPortableEnvironmentPlan(
+                profile, bin, new Dictionary<string, string?> { ["JAVA_HOME"] = otherJdk }, roots);
+
+            Assert.Equal([bin], firstRun.PathEntriesToAdd, StringComparer.OrdinalIgnoreCase);
+            Assert.Equal(jdk, firstRun.VariablesToAdd["JAVA_HOME"], ignoreCase: true);
+            Assert.Empty(secondRun.PathEntriesToAdd);
+            Assert.Equal(1, secondRun.ExistingPathEntries);
+            Assert.Empty(secondRun.VariablesToAdd);
+            Assert.Empty(secondRun.VariableConflicts);
+            Assert.Contains("переменная: API_TOKEN", secondRun.RejectedOrMissingEntries);
+            Assert.Equal(["JAVA_HOME"], conflict.VariableConflicts);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     [Fact]

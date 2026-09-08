@@ -488,12 +488,35 @@ public partial class MainWindow : Window
         });
     }
 
+    private async void PreviewApps_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync("Проверка плана восстановления среды…", async cancellationToken =>
+        {
+            var result = await _toolInventory.PreviewRestoreAsync(cancellationToken);
+            EnvironmentRestorePlanText.Text = string.Join(Environment.NewLine,
+                new[] { result.Message, result.Details }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            await ShowResultAsync(result, recordActivity: false);
+        });
+    }
+
     private async void InstallApps_Click(object sender, RoutedEventArgs e)
     {
+        OperationResult? preview = null;
+        await RunBusyAsync("Проверка плана восстановления среды…", async cancellationToken =>
+        {
+            preview = await _toolInventory.PreviewRestoreAsync(cancellationToken);
+            EnvironmentRestorePlanText.Text = string.Join(Environment.NewLine,
+                new[] { preview.Message, preview.Details }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            if (!preview.Succeeded)
+                await ShowResultAsync(preview, recordActivity: false);
+        });
+        if (preview is null || !preview.Succeeded)
+            return;
+
         var confirmation = MessageBox.Show(this,
             _settings.IncludeVsCode
-                ? "Установить доступные приложения и расширения VS Code, затем применить разрешённые Git-настройки? Для некоторых установщиков может потребоваться UAC."
-                : "Установить доступные приложения и применить разрешённые Git-настройки? Для некоторых установщиков может потребоваться UAC.",
+                ? preview.Message + "\n\nУстановить только недостающие приложения и расширения VS Code, затем применить разрешённые Git/PATH-настройки? Для некоторых установщиков может потребоваться UAC."
+                : preview.Message + "\n\nУстановить только недостающие приложения и применить разрешённые Git/PATH-настройки? Для некоторых установщиков может потребоваться UAC.",
             "Восстановление среды", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (confirmation != MessageBoxResult.Yes)
             return;

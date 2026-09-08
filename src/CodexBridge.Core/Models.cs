@@ -156,6 +156,34 @@ public sealed class PortableGitProfile
     public Dictionary<string, string> Settings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
+public sealed class PortableEnvironmentProfile
+{
+    public int SchemaVersion { get; set; } = 1;
+    public DateTimeOffset CapturedUtc { get; set; }
+    public List<RuntimeVersionInfo> Runtimes { get; set; } = [];
+    public List<string> UserPathEntries { get; set; } = [];
+    public Dictionary<string, string> UserVariables { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class RuntimeVersionInfo
+{
+    public string Name { get; set; } = "";
+    public string Version { get; set; } = "";
+}
+
+public sealed record WingetInventoryPlan(
+    string PendingInventoryJson,
+    IReadOnlyList<string> RequestedPackageIds,
+    IReadOnlyList<string> InstalledPackageIds,
+    IReadOnlyList<string> PendingPackageIds);
+
+public sealed record PortableEnvironmentPlan(
+    IReadOnlyList<string> PathEntriesToAdd,
+    int ExistingPathEntries,
+    IReadOnlyDictionary<string, string> VariablesToAdd,
+    IReadOnlyList<string> VariableConflicts,
+    IReadOnlyList<string> RejectedOrMissingEntries);
+
 public sealed record OperationResult(bool Succeeded, string Message, string Details = "")
 {
     public static OperationResult Ok(string message, string details = "") => new(true, message, details);
