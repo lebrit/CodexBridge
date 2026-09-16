@@ -29,12 +29,13 @@ $dataDirectory = Join-Path $env:LOCALAPPDATA 'CodexBridge'
 if (Test-Path -LiteralPath $installDirectory) {
     throw "Clean-runner precondition failed; install directory already exists: $installDirectory"
 }
-if (Test-Path -LiteralPath $dataDirectory) {
-    throw "Clean-runner precondition failed; data directory already exists: $dataDirectory"
-}
 
 $setupLog = Join-Path $env:RUNNER_TEMP 'CodexBridge-setup.log'
 $upgradeLog = Join-Path $env:RUNNER_TEMP 'CodexBridge-upgrade.log'
+$sentinel = Join-Path $dataDirectory 'installer-preservation-test.txt'
+$sentinelValue = [Guid]::NewGuid().ToString('N')
+New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
+Set-Content -LiteralPath $sentinel -Value $sentinelValue -Encoding utf8
 
 function Invoke-Setup([string]$Path, [string]$LogPath) {
     $arguments = @(
@@ -73,11 +74,9 @@ function Assert-RegisteredVersion([string]$Version) {
 Invoke-Setup $baselineSetup $setupLog
 Assert-Installed $ExpectedVersion
 Assert-RegisteredVersion $BaselineVersion
-
-New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
-$sentinel = Join-Path $dataDirectory 'installer-preservation-test.txt'
-$sentinelValue = [Guid]::NewGuid().ToString('N')
-Set-Content -LiteralPath $sentinel -Value $sentinelValue -Encoding utf8
+if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) {
+    throw 'Initial install changed pre-existing user data.'
+}
 
 Invoke-Setup $currentSetup $upgradeLog
 Assert-Installed $ExpectedVersion
