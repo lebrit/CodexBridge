@@ -11,7 +11,7 @@ $forbiddenFiles = @(
     'state_5.sqlite',
     '.env'
 )
-$textExtensions = @('.cs', '.csproj', '.xaml', '.ps1', '.md', '.yml', '.yaml', '.json', '.props', '.sln', '.gitignore')
+$textExtensions = @('.cs', '.csproj', '.xaml', '.ps1', '.iss', '.md', '.yml', '.yaml', '.json', '.props', '.sln', '.gitignore')
 $patterns = @(
     '(?i)[A-Z]:\\Users\\[^\\\s]+',
     '(?i)github_pat_[A-Za-z0-9_]{20,}',

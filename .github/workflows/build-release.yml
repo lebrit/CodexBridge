@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -56,7 +56,27 @@ jobs:
 
       - name: Build, test and package
         shell: pwsh
-        run: .\scripts\Build-Release.ps1 -Version "${{ steps.version.outputs.version }}" -RequireResticIntegration
+        run: .\scripts\Build-Release.ps1 -Version "${{ steps.version.outputs.version }}" -RequireResticIntegration -RequireInstaller
+
+      - name: Test clean Windows install, update and uninstall
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $baselineVersion = '0.0.0-ci-baseline'
+          $baselineDirectory = Join-Path $env:RUNNER_TEMP 'CodexBridge-baseline-installer'
+          .\scripts\Build-Installer.ps1 `
+            -Version $baselineVersion `
+            -SourceDirectory .\artifacts\publish\win-x64 `
+            -OutputDirectory $baselineDirectory `
+            -Require
+          $baseline = Join-Path $baselineDirectory "CodexBridge-$baselineVersion-setup.exe"
+          $current = (Get-ChildItem .\artifacts\CodexBridge-*-setup.exe -File -ErrorAction Stop).FullName
+          .\scripts\Test-InstallerAcceptance.ps1 `
+            -BaselineSetupPath $baseline `
+            -BaselineVersion $baselineVersion `
+            -CurrentSetupPath $current `
+            -ExpectedVersion $env:VERSION
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
@@ -64,6 +84,7 @@ jobs:
           name: CodexBridge-${{ steps.version.outputs.version }}-win-x64
           path: |
             artifacts/CodexBridge-*.zip
+            artifacts/CodexBridge-*-setup.exe
             artifacts/CodexBridge-*.sha256
           retention-days: 30
           if-no-files-found: error
@@ -75,15 +96,16 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           $zip = (Get-ChildItem artifacts\CodexBridge-*.zip -File).FullName
-          $hash = (Get-ChildItem artifacts\CodexBridge-*.sha256 -File).FullName
+          $setup = (Get-ChildItem artifacts\CodexBridge-*-setup.exe -File).FullName
+          $hashes = (Get-ChildItem artifacts\CodexBridge-*.sha256 -File).FullName
           $notes = @"
-          Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, and public-safety validation.
+          Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, public-safety validation, and a clean-runner install/update/uninstall acceptance test. The installer preserves the per-user CodexBridge data directory during updates and uninstall.
 
           Code signing policy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md
 
           This build is unsigned unless both these release notes and its Authenticode signature prove otherwise. The SignPath Foundation application was not approved because the project does not yet meet the program's public-visibility requirements.
           "@
-          gh release create "v$env:VERSION" $zip $hash `
+          gh release create "v$env:VERSION" $zip $setup $hashes `
             --repo "$env:GITHUB_REPOSITORY" `
             --target "$env:GITHUB_SHA" `
             --title "CodexBridge $env:VERSION" `

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$Version = '',
-    [switch]$RequireResticIntegration
+    [switch]$RequireResticIntegration,
+    [switch]$RequireInstaller
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,6 +74,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Agent publish failed.' }
 
     Copy-Item -LiteralPath .\README.md -Destination $publish
+    Copy-Item -LiteralPath .\README.en.md -Destination $publish
     Copy-Item -LiteralPath .\LICENSE -Destination $publish
     & (Join-Path $PSScriptRoot 'Test-ReleaseSmoke.ps1') -PublishDirectory $publish
 
@@ -81,6 +83,12 @@ try {
     $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     $hashPath = "$zip.sha256"
     Set-Content -LiteralPath $hashPath -Value "$hash  $([IO.Path]::GetFileName($zip))" -Encoding utf8
+
+    & (Join-Path $PSScriptRoot 'Build-Installer.ps1') `
+        -Version $Version `
+        -SourceDirectory $publish `
+        -OutputDirectory $artifacts `
+        -Require:$RequireInstaller
 
     Write-Host "BUILD_OK=$zip"
     Write-Host "SHA256=$hash"

@@ -24,12 +24,13 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 - Git, Python, Node.js, and Java versions are recorded; only existing allowlisted user paths and path-valued variables can be added, while conflicting values are preserved;
 - repeated environment recovery does not reinstall applications or VS Code extensions and does not duplicate PATH or matching Git settings;
 - no telemetry, hosted backend, copied passwords, OAuth sessions, or active Codex database;
-- reproducible GitHub Actions prereleases with tests, a public-data safety check, and SHA-256 files.
+- a per-user installer that updates in place and leaves `%LOCALAPPDATA%\CodexBridge` intact during uninstall;
+- reproducible GitHub Actions prereleases with ZIP and installer packages, tests, a public-data safety check, and SHA-256 files.
 
 ## Quick start
 
-1. Download and unpack a ZIP from [Releases](https://github.com/lebrit/CodexBridge/releases).
-2. Run `CodexBridge.App.exe` and complete the setup wizard.
+1. Download `CodexBridge-...-setup.exe` from [Releases](https://github.com/lebrit/CodexBridge/releases) and install it. The ZIP remains available as a portable alternative.
+2. Open CodexBridge from the Start menu and complete the setup wizard.
 3. Store the generated recovery key separately. Encrypted snapshots cannot be opened without it.
 4. Find and review projects, create a backup, and check the repository.
 5. Before recovery, run the verified dry-run. If recovery is interrupted, use the transaction journal in the Recovery page to resume a verified rollback.
@@ -46,6 +47,6 @@ winget install --id restic.restic --exact
 powershell -ExecutionPolicy Bypass -File .\scripts\Build-Release.ps1
 ```
 
-The local build warns when restic is unavailable; the GitHub Actions release gate always requires the migration lab to pass.
+The local build always creates the ZIP and also creates the installer when Inno Setup 6 is available. The GitHub Actions release gate requires the migration lab, installer build, and a clean-runner install/update/uninstall acceptance test to pass.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [roadmap](docs/ROADMAP.md). Licensed under the [MIT License](LICENSE).
