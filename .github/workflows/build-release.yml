@@ -98,6 +98,8 @@ jobs:
           $zip = (Get-ChildItem artifacts\CodexBridge-*.zip -File).FullName
           $setup = (Get-ChildItem artifacts\CodexBridge-*-setup.exe -File).FullName
           $hashes = (Get-ChildItem artifacts\CodexBridge-*.sha256 -File).FullName
+          $assets = @($zip, $setup) + $hashes
+          $tag = "v$env:VERSION"
           $notes = @"
           Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, public-safety validation, and a clean-runner install/update/uninstall acceptance test. The installer preserves the per-user CodexBridge data directory during updates and uninstall.
 
@@ -105,9 +107,32 @@ jobs:
 
           This build is unsigned unless both these release notes and its Authenticode signature prove otherwise. The SignPath Foundation application was not approved because the project does not yet meet the program's public-visibility requirements.
           "@
-          gh release create "v$env:VERSION" $zip $setup $hashes `
-            --repo "$env:GITHUB_REPOSITORY" `
-            --target "$env:GITHUB_SHA" `
-            --title "CodexBridge $env:VERSION" `
-            --notes $notes `
-            --prerelease
+          $published = $false
+          for ($attempt = 1; $attempt -le 3 -and -not $published; $attempt++) {
+            gh release view $tag --repo "$env:GITHUB_REPOSITORY" *> $null
+            if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag $assets --clobber --repo "$env:GITHUB_REPOSITORY"
+              if ($LASTEXITCODE -eq 0) {
+                gh release edit $tag `
+                  --repo "$env:GITHUB_REPOSITORY" `
+                  --title "CodexBridge $env:VERSION" `
+                  --notes $notes `
+                  --prerelease
+              }
+            }
+            else {
+              gh release create $tag $assets `
+                --repo "$env:GITHUB_REPOSITORY" `
+                --target "$env:GITHUB_SHA" `
+                --title "CodexBridge $env:VERSION" `
+                --notes $notes `
+                --prerelease
+            }
+
+            $published = $LASTEXITCODE -eq 0
+            if (-not $published -and $attempt -lt 3) {
+              Write-Warning "Release publication attempt $attempt failed; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          if (-not $published) { throw "Could not publish $tag after three attempts." }
