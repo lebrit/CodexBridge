@@ -62,9 +62,8 @@ function Assert-Installed([string]$Version) {
 }
 
 function Assert-RegisteredVersion([string]$Version) {
-    $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
-        Where-Object { $_.DisplayName -eq 'CodexBridge' } |
-        Select-Object -First 1
+    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F573740-5355-4FB5-996B-44A79C6A334C}_is1'
+    $entry = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue
     $registeredVersion = if ($entry) { [string]$entry.DisplayVersion } else { '<missing>' }
     if ($registeredVersion -ne $Version) {
         throw "Unexpected installer registration version: $registeredVersion"

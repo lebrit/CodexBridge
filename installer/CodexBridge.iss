@@ -25,6 +25,7 @@ AllowNetworkDrive=no
 AllowUNCPath=no
 UsePreviousAppDir=yes
 Uninstallable=yes
+UninstallDisplayName=CodexBridge
 UninstallDisplayIcon={app}\CodexBridge.App.exe
 CloseApplications=yes
 RestartApplications=yes
