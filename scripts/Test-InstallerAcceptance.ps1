@@ -119,6 +119,7 @@ if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) {
 if ($LASTEXITCODE -eq 0) {
     throw 'Uninstall left the CodexBridge scheduled task behind.'
 }
+$global:LASTEXITCODE = 0
 
 Write-Host "INSTALLER_ACCEPTANCE_OK=$ExpectedVersion"
 Write-Host "USER_DATA_PRESERVED=$sentinel"
