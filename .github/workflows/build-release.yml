@@ -1,0 +1,230 @@
+name: Build and publish Windows package
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codexbridge-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up restic migration lab
+        shell: pwsh
+        run: .\scripts\Install-ResticForCi.ps1
+
+      - name: Compute version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$props = Get-Content Directory.Build.props -Raw
+          $baseVersion = [string]$props.Project.PropertyGroup.VersionPrefix
+          $version = "$baseVersion-build.$env:GITHUB_RUN_NUMBER.$env:GITHUB_RUN_ATTEMPT"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build, test and package
+        shell: pwsh
+        run: .\scripts\Build-Release.ps1 -Version "${{ steps.version.outputs.version }}" -RequireResticIntegration -RequireInstaller
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: CodexBridge-${{ steps.version.outputs.version }}-win-x64
+          path: |
+            artifacts/CodexBridge-*.zip
+            artifacts/CodexBridge-*-setup.exe
+            artifacts/CodexBridge-*.sha256
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload synthetic GUI reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gui-build-${{ github.run_number }}
+          path: artifacts/ui-smoke-*/
+          retention-days: 14
+
+  migration-source:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install restic
+        shell: pwsh
+        run: .\scripts\Install-ResticForCi.ps1
+      - name: Create encrypted synthetic snapshot
+        shell: pwsh
+        run: .\scripts\Test-CrossRunnerMigration.ps1 -Mode Create -FixtureDirectory "$env:RUNNER_TEMP\CodexBridge-cross-runner"
+      - name: Transfer encrypted repository to destination runner
+        uses: actions/upload-artifact@v7
+        with:
+          name: cross-runner-migration-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/CodexBridge-cross-runner/
+          retention-days: 1
+          if-no-files-found: error
+
+  migration-destination:
+    needs: migration-source
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install restic
+        shell: pwsh
+        run: .\scripts\Install-ResticForCi.ps1
+      - name: Receive encrypted repository from source runner
+        uses: actions/download-artifact@v8
+        with:
+          name: cross-runner-migration-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/CodexBridge-cross-runner
+      - name: Verify and restore on independent runner
+        shell: pwsh
+        run: .\scripts\Test-CrossRunnerMigration.ps1 -Mode Restore -FixtureDirectory "$env:RUNNER_TEMP\CodexBridge-cross-runner"
+      - name: Upload migration evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cross-runner-evidence-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/CodexBridge-cross-runner/migration-report.json
+          retention-days: 14
+
+  acceptance:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: CodexBridge-${{ needs.build.outputs.version }}-win-x64
+          path: artifacts
+
+      - name: Verify packages and test real previous-release upgrade
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          $baselineVersion = '0.9.0-build.26.1'
+          $baselineDirectory = Join-Path $env:RUNNER_TEMP 'CodexBridge-baseline'
+          New-Item -ItemType Directory -Path $baselineDirectory | Out-Null
+          gh release download "v$baselineVersion" --repo "$env:GITHUB_REPOSITORY" `
+            --pattern "CodexBridge-$baselineVersion-setup.exe" --dir $baselineDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the previous release.' }
+          $baseline = Join-Path $baselineDirectory "CodexBridge-$baselineVersion-setup.exe"
+          if ((Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6e297778549fbc656e18a0f07a5cccc6e152cacd1d457c2775e63d7bd6f6d398') {
+            throw 'Previous-release checksum mismatch.'
+          }
+          foreach ($file in Get-ChildItem artifacts\*.sha256) {
+            $parts = (Get-Content $file.FullName -Raw).Trim() -split '\s+', 2
+            $package = Join-Path artifacts $parts[1]
+            if ((Get-FileHash $package -Algorithm SHA256).Hash -ne $parts[0]) { throw 'Package checksum mismatch.' }
+          }
+          .\scripts\Test-InstallerAcceptance.ps1 `
+            -BaselineSetupPath $baseline -BaselineVersion $baselineVersion `
+            -CurrentSetupPath ".\artifacts\CodexBridge-$env:VERSION-setup.exe" `
+            -ExpectedVersion $env:VERSION
+
+      - name: Upload acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: acceptance-${{ matrix.os }}-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/CodexBridge-*.log
+            ${{ runner.temp }}/CodexBridge-ui-smoke/
+          retention-days: 14
+
+  publish:
+    needs: [build, acceptance, migration-destination]
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: CodexBridge-${{ needs.build.outputs.version }}-win-x64
+          path: artifacts
+
+      - name: Publish versioned prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          $zip = (Get-ChildItem artifacts\CodexBridge-*.zip -File).FullName
+          $setup = (Get-ChildItem artifacts\CodexBridge-*-setup.exe -File).FullName
+          $hashes = (Get-ChildItem artifacts\CodexBridge-*.sha256 -File).FullName
+          $assets = @($zip, $setup) + $hashes
+          $tag = "v$env:VERSION"
+          $notes = @"
+          Предварительная сборка CodexBridge для Windows 11 x64 из commit $env:GITHUB_SHA.
+
+          Быстрый старт:
+          1. Скачайте CodexBridge-$env:VERSION-setup.exe и расположенный рядом файл .sha256.
+          2. Сверьте SHA-256, установите приложение и сохраните созданный ключ восстановления отдельно от компьютера.
+          3. Начните с локальной копии, выполните глубокую проверку и пробное восстановление в новую пустую папку.
+
+          Автоматически проверено: unit-тесты, изолированная restic-лаборатория, зашифрованный перенос Windows Server 2022 → 2025, public-safety, 36 состояний GUI и установка/обновление/удаление на Windows Server 2022 и 2025. Пользовательские данные и задания других установок сохраняются.
+
+          Ручная приёмка: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/docs/MANUAL_ACCEPTANCE.md
+          Вопросы и идеи: https://github.com/$env:GITHUB_REPOSITORY/discussions
+          Ошибки: https://github.com/$env:GITHUB_REPOSITORY/issues
+
+          Code signing policy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md
+
+          Сборка не подписана, пока одновременно примечания релиза и Authenticode-подпись не доказывают обратное. Заявка SignPath Foundation не была одобрена из-за пока недостаточной публичной известности проекта.
+          "@
+          $published = $false
+          for ($attempt = 1; $attempt -le 3 -and -not $published; $attempt++) {
+            gh release view $tag --repo "$env:GITHUB_REPOSITORY" *> $null
+            if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag $assets --clobber --repo "$env:GITHUB_REPOSITORY"
+              if ($LASTEXITCODE -eq 0) {
+                gh release edit $tag `
+                  --repo "$env:GITHUB_REPOSITORY" `
+                  --title "CodexBridge $env:VERSION" `
+                  --notes $notes `
+                  --prerelease
+              }
+            }
+            else {
+              gh release create $tag $assets `
+                --repo "$env:GITHUB_REPOSITORY" `
+                --target "$env:GITHUB_SHA" `
+                --title "CodexBridge $env:VERSION" `
+                --notes $notes `
+                --prerelease
+            }
+
+            $published = $LASTEXITCODE -eq 0
+            if (-not $published -and $attempt -lt 3) {
+              Write-Warning "Release publication attempt $attempt failed; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          if (-not $published) { throw "Could not publish $tag after three attempts." }
