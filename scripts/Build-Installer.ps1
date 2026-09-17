@@ -36,7 +36,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $source 'CodexBridge.Agent.exe'))) {
 $knownCompilers = @(
     $env:INNO_SETUP_COMPILER,
     (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
-    (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+    (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
 $compiler = if ($command) {

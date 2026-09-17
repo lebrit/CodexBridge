@@ -34,8 +34,8 @@ try {
         throw "GUI smoke test failed with code $($process.ExitCode). Report: $report"
     }
     $checks = @(Get-Content -LiteralPath (Join-Path $report 'success.txt'))
-    if ($checks.Count -ne 30) { throw "Incomplete GUI report: $($checks.Count) checks." }
-    Write-Host "GUI_SMOKE_OK=30 checks; $report"
+    if ($checks.Count -ne 36) { throw "Incomplete GUI report: $($checks.Count) checks." }
+    Write-Host "GUI_SMOKE_OK=36 checks; $report"
 }
 finally {
     if ($null -ne $process -and -not $process.HasExited) {

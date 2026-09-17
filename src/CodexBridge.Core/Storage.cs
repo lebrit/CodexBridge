@@ -26,6 +26,7 @@ public static class AppPaths
     public static string GitProfileFile => Path.Combine(DataDirectory, "git-profile.json");
     public static string PortableEnvironmentProfileFile => Path.Combine(DataDirectory, "environment-profile.json");
     public static string BackupLockFile => Path.Combine(DataDirectory, "backup.lock");
+    public static string UpdatesDirectory => Path.Combine(DataDirectory, "updates");
 
     public static void EnsureCreated()
     {
@@ -33,6 +34,7 @@ public static class AppPaths
         Directory.CreateDirectory(ResticCacheDirectory);
         Directory.CreateDirectory(RestoreDirectory);
         Directory.CreateDirectory(RestoreTransactionsDirectory);
+        Directory.CreateDirectory(UpdatesDirectory);
     }
 }
 
@@ -80,7 +82,7 @@ public sealed class SettingsStore(JsonFileStore files)
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        settings.SchemaVersion = 2;
+        settings.SchemaVersion = 3;
         settings.KeepDaily = Math.Clamp(settings.KeepDaily, 1, 365);
         settings.KeepWeekly = Math.Clamp(settings.KeepWeekly, 1, 104);
         settings.KeepMonthly = Math.Clamp(settings.KeepMonthly, 1, 120);

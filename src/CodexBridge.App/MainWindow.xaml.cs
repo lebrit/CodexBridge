@@ -29,6 +29,8 @@ public partial class MainWindow : Window
     private readonly ToolInventoryService _toolInventory;
     private readonly EnvironmentDiagnosticsService _environmentDiagnostics;
     private readonly EnvironmentAutomationService _environmentAutomation;
+    private readonly DiagnosticsBundleService _diagnosticsBundle;
+    private readonly UpdateService _updates;
     private readonly RestoreService _restore;
     private readonly DispatcherTimer _stateRefreshTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private ICollectionView? _projectsView;
@@ -71,9 +73,11 @@ public partial class MainWindow : Window
         _toolInventory = new ToolInventoryService(_processes);
         _environmentDiagnostics = new EnvironmentDiagnosticsService();
         _environmentAutomation = new EnvironmentAutomationService(_processes);
+        _diagnosticsBundle = new DiagnosticsBundleService();
+        _updates = new UpdateService();
         _restore = new RestoreService(_restic, _files);
 
-        VersionText.Text = "Версия " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev");
+        VersionText.Text = "Версия " + GetApplicationVersion();
         Loaded += async (_, _) =>
         {
             if (smokeTest)
@@ -137,6 +141,10 @@ public partial class MainWindow : Window
         await LoadSettingsAsync();
         if (!_settings.SetupCompleted)
             await ShowWizardAsync();
+        if (_settings.AutomaticUpdateCheck
+            && (_settings.LastUpdateCheckUtc is null
+                || DateTimeOffset.UtcNow - _settings.LastUpdateCheckUtc > TimeSpan.FromDays(1)))
+            _ = CheckForUpdatesSilentlyAsync();
     }
 
     private Task LoadSettingsAsync() =>
@@ -155,7 +163,22 @@ public partial class MainWindow : Window
             CloudRepositoryText.Text = _settings.CloudRepository;
             CloudEnabledCheck.IsChecked = _settings.CloudEnabled;
             DestinationText.Text = _settings.DestinationRoot;
+            NewComputerBanner.Visibility = _settings.PendingNewComputerRestore
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            if (_settings.PendingNewComputerRestore)
+            {
+                if (_settings.CloudEnabled && !string.IsNullOrWhiteSpace(_settings.CloudRepository))
+                    CloudSourceRadio.IsChecked = true;
+                else
+                    LocalSourceRadio.IsChecked = true;
+                RestoreNav.IsChecked = true;
+            }
             RetentionEnabledCheck.IsChecked = _settings.RetentionEnabled;
+            AutomaticUpdateCheckBox.IsChecked = _settings.AutomaticUpdateCheck;
+            UpdateStatusText.Text = _settings.LastUpdateCheckUtc is null
+                ? "Проверка обновлений ещё не выполнялась."
+                : $"Последняя проверка: {_settings.LastUpdateCheckUtc.Value.ToLocalTime():g}.";
             KeepDailyText.Text = _settings.KeepDaily.ToString();
             KeepWeeklyText.Text = _settings.KeepWeekly.ToString();
             KeepMonthlyText.Text = _settings.KeepMonthly.ToString();
@@ -537,6 +560,108 @@ public partial class MainWindow : Window
         });
     }
 
+    private async void SaveDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Сохранить безопасный диагностический архив",
+            Filter = "ZIP archive (*.zip)|*.zip",
+            DefaultExt = ".zip",
+            AddExtension = true,
+            FileName = $"CodexBridge-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip"
+        };
+        if (dialog.ShowDialog(this) != true)
+            return;
+
+        string? savedPath = null;
+        await RunBusyAsync("Подготовка безопасного диагностического архива…", async cancellationToken =>
+        {
+            var report = await _environmentDiagnostics.DiagnoseAsync(_settings, cancellationToken);
+            var state = await _stateStore.LoadAsync(cancellationToken);
+            var projects = await _catalogStore.LoadAsync(cancellationToken);
+            var version = GetApplicationVersion();
+            savedPath = await _diagnosticsBundle.CreateAsync(
+                dialog.FileName, _settings, state, report, version, cancellationToken, projects);
+            AppendLog("Создан безопасный диагностический архив: " + savedPath);
+        });
+
+        if (!string.IsNullOrWhiteSpace(savedPath))
+            MessageBox.Show(this,
+                "Диагностический архив сохранён. Перед отправкой при желании его можно открыть и проверить.\n\n" + savedPath,
+                "CodexBridge", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync("Проверка обновлений…", cancellationToken =>
+            CheckForUpdatesAsync(promptForDownload: true, cancellationToken));
+    }
+
+    private async Task CheckForUpdatesSilentlyAsync()
+    {
+        try
+        {
+            await CheckForUpdatesAsync(promptForDownload: false, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            UpdateStatusText.Text = "Автоматическая проверка сейчас недоступна.";
+            _settings.LastUpdateCheckUtc = DateTimeOffset.UtcNow;
+            try
+            {
+                await _settingsStore.SaveAsync(_settings);
+            }
+            catch
+            {
+                // The original network error remains the useful diagnostic event.
+            }
+            ErrorLog.Write("Проверка обновлений", exception.Message, exception.ToString());
+        }
+    }
+
+    private async Task CheckForUpdatesAsync(bool promptForDownload, CancellationToken cancellationToken)
+    {
+        var update = await _updates.GetLatestAsync(GetApplicationVersion(), cancellationToken);
+        _settings.LastUpdateCheckUtc = DateTimeOffset.UtcNow;
+        await _settingsStore.SaveAsync(_settings, cancellationToken);
+        if (update is null)
+        {
+            UpdateStatusText.Text = $"Установлена актуальная версия {GetApplicationVersion()}.";
+            if (promptForDownload)
+                MessageBox.Show(this, UpdateStatusText.Text, "Обновления CodexBridge",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        UpdateStatusText.Text = $"Доступна версия {update.Version}.";
+        if (!promptForDownload)
+            return;
+
+        var download = MessageBox.Show(this,
+            $"Доступна версия {update.Version}. Скачать официальный установщик из GitHub и проверить SHA-256?",
+            "Обновление CodexBridge", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (download != MessageBoxResult.Yes)
+            return;
+
+        var installer = await _updates.DownloadVerifiedInstallerAsync(
+            update, AppPaths.UpdatesDirectory, cancellationToken);
+        UpdateStatusText.Text = $"Версия {update.Version} скачана и проверена по SHA-256.";
+        var launch = MessageBox.Show(this,
+            "Установщик успешно проверен. Запустить обновление сейчас?\n\n" + installer,
+            "Обновление готово", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (launch == MessageBoxResult.Yes)
+            Process.Start(new ProcessStartInfo(installer) { UseShellExecute = true });
+    }
+
+    private static string GetApplicationVersion()
+    {
+        var informational = Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informational))
+            return informational.Split('+', 2)[0];
+        return Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
+    }
+
     private async void PrepareEnvironment_Click(object sender, RoutedEventArgs e)
     {
         var confirmation = MessageBox.Show(this,
@@ -714,8 +839,16 @@ public partial class MainWindow : Window
         {
             await SaveSettingsCoreAsync();
             var password = GetPassword() ?? throw new InvalidOperationException("Введите ключ восстановления.");
-            await ShowResultAsync(await _restore.RestoreSnapshotAsync(
-                _settings, SelectedRepository(), password, snapshot.Id, DestinationText.Text, cancellationToken));
+            var result = await _restore.RestoreSnapshotAsync(
+                _settings, SelectedRepository(), password, snapshot.Id, DestinationText.Text, cancellationToken);
+            await ShowResultAsync(result);
+            if (result.Succeeded && _settings.PendingNewComputerRestore)
+            {
+                _settings.PendingNewComputerRestore = false;
+                await _settingsStore.SaveAsync(_settings, cancellationToken);
+                NewComputerBanner.Visibility = Visibility.Collapsed;
+                AppendLog("Первый этап переноса завершён. Следующий шаг — восстановление приложений на странице «Программы».");
+            }
         });
         await RefreshRestoreTransactionsAsync();
         await RefreshDashboardAsync();
@@ -831,6 +964,7 @@ public partial class MainWindow : Window
         if (VsCodeCard.Visibility == Visibility.Visible)
             _settings.IncludeVsCode = VsCodeIncludeCheck.IsChecked == true;
         _settings.RetentionEnabled = RetentionEnabledCheck.IsChecked == true;
+        _settings.AutomaticUpdateCheck = AutomaticUpdateCheckBox.IsChecked == true;
         _settings.KeepDaily = ParseRetention(KeepDailyText, "Дни", 365);
         _settings.KeepWeekly = ParseRetention(KeepWeeklyText, "Недели", 104);
         _settings.KeepMonthly = ParseRetention(KeepMonthlyText, "Месяцы", 120);

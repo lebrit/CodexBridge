@@ -35,6 +35,8 @@ public partial class MainWindow
                     if (ContentTabs.SelectedIndex != page || !navigation[page].IsVisible)
                         throw new InvalidOperationException($"Navigation failed: {theme}, page {page}");
                     AssertInputContrast(LocalRepositoryText);
+                    AssertAccessible(LocalRepositoryText);
+                    AssertAccessible(LogText);
                     SaveSmokeImage(this, Path.Combine(reportDirectory, $"{theme}-{size.Width}-page-{page}.png"));
                     checks.Add($"{theme}/{size.Width}/page-{page}: OK");
                 }
@@ -61,8 +63,23 @@ public partial class MainWindow
                     if (!next.IsVisible || (step > 0 && (!back.IsVisible || Bounds(back, wizard).IntersectsWith(Bounds(next, wizard)))))
                         throw new InvalidOperationException("Wizard navigation buttons overlap or are hidden.");
                     AssertInputContrast((TextBox)wizard.FindName("LocalRepositoryText"));
+                    AssertAccessible((TextBox)wizard.FindName("ProjectRootText"));
+                    AssertAccessible(next);
                     SaveSmokeImage(wizard, Path.Combine(reportDirectory, $"{theme}-wizard-{step}.png"));
                     checks.Add($"{theme}/wizard-{step}: OK");
+                }
+
+                ((RadioButton)wizard.FindName("NewComputerModeRadio")).IsChecked = true;
+                for (var step = 0; step < 3; step++)
+                {
+                    wizard.ShowStep(step);
+                    await Dispatcher.InvokeAsync(wizard.UpdateLayout, DispatcherPriority.ApplicationIdle);
+                    var next = (Button)wizard.FindName("NextButton");
+                    var generate = (Button)wizard.FindName("GenerateKeyButton");
+                    if (!next.IsVisible || generate.Visibility != Visibility.Collapsed)
+                        throw new InvalidOperationException("New-computer wizard mode is not rendered safely.");
+                    SaveSmokeImage(wizard, Path.Combine(reportDirectory, $"{theme}-wizard-recovery-{step}.png"));
+                    checks.Add($"{theme}/wizard-recovery-{step}: OK");
                 }
             }
             finally { wizard.Close(); }
@@ -87,6 +104,12 @@ public partial class MainWindow
         var b = Luminance(background.Color);
         if ((Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05) < 4.5)
             throw new InvalidOperationException("Input text contrast is below 4.5:1.");
+    }
+
+    private static void AssertAccessible(DependencyObject element)
+    {
+        if (string.IsNullOrWhiteSpace(System.Windows.Automation.AutomationProperties.GetName(element)))
+            throw new InvalidOperationException("An important control has no accessible name.");
     }
 
     private static void SaveSmokeImage(Window window, string path)

@@ -1,4 +1,5 @@
 using CodexBridge.Core;
+using System.IO.Compression;
 using System.Text.Json;
 
 namespace CodexBridge.Tests;
@@ -273,6 +274,106 @@ public sealed class CoreTests
             Assert.Equal(1, reloaded.RecordedFiles);
             Assert.True((await restartedStore.RollbackAsync(reloaded.Id)).Succeeded);
             Assert.False(File.Exists(partial));
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task SafeMerge_locked_destination_fails_without_overwriting_or_partial_files()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(testRoot, "source.txt");
+        var destination = Path.Combine(testRoot, "destination.txt");
+        var conflict = Path.Combine(testRoot, "conflicts", "destination.txt");
+        Directory.CreateDirectory(testRoot);
+        await File.WriteAllTextAsync(source, "incoming");
+        await File.WriteAllTextAsync(destination, "existing");
+
+        try
+        {
+            await using var locked = new FileStream(
+                destination, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+            await Assert.ThrowsAnyAsync<IOException>(() =>
+                SafeMergeService.MergeFileAsync(source, destination, conflict));
+
+            Assert.False(File.Exists(conflict));
+            Assert.Empty(Directory.EnumerateFiles(testRoot, "*.partial", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task Restore_transaction_rolls_back_after_destination_directory_becomes_unavailable()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(testRoot, "source.txt");
+        var destinationRoot = Path.Combine(testRoot, "destination");
+        var blockedDirectory = Path.Combine(destinationRoot, "blocked");
+        var destination = Path.Combine(blockedDirectory, "source.txt");
+        var journals = Path.Combine(testRoot, "journals");
+        Directory.CreateDirectory(destinationRoot);
+        await File.WriteAllTextAsync(source, "restored");
+        await File.WriteAllTextAsync(blockedDirectory, "this file blocks directory creation");
+
+        try
+        {
+            var store = new RestoreTransactionStore(journals);
+            var transaction = await store.BeginAsync("snapshot-unavailable", destinationRoot);
+
+            await Assert.ThrowsAnyAsync<IOException>(() => SafeMergeService.MergeFileAsync(
+                source, destination, Path.Combine(transaction.ConflictRoot, "source.txt"), transaction));
+
+            var restarted = new RestoreTransactionStore(journals);
+            var reloaded = Assert.Single(await restarted.ListAsync());
+            Assert.True(reloaded.NeedsAttention);
+            Assert.True((await restarted.RollbackAsync(reloaded.Id)).Succeeded);
+            Assert.Equal("this file blocks directory creation", await File.ReadAllTextAsync(blockedDirectory));
+            Assert.Empty(Directory.EnumerateFiles(testRoot, "*.partial", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, true);
+        }
+    }
+
+    [Fact]
+    public async Task Restore_rollback_ignores_only_a_torn_final_journal_record()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(testRoot, "source.txt");
+        var destinationRoot = Path.Combine(testRoot, "destination");
+        var destination = Path.Combine(destinationRoot, "source.txt");
+        var journals = Path.Combine(testRoot, "journals");
+        Directory.CreateDirectory(testRoot);
+        await File.WriteAllTextAsync(source, "restored");
+
+        try
+        {
+            var store = new RestoreTransactionStore(journals);
+            var transaction = await store.BeginAsync("snapshot-torn-journal", destinationRoot);
+            var result = await SafeMergeService.MergeFileAsync(
+                source, destination, Path.Combine(transaction.ConflictRoot, "source.txt"), transaction);
+            await store.CompleteAsync(transaction, result);
+            await File.AppendAllTextAsync(
+                Path.Combine(store.GetTransactionDirectory(transaction.Id), "files.jsonl"),
+                Environment.NewLine + "{\"sequence\":");
+
+            var rollback = await new RestoreTransactionStore(journals).RollbackAsync(transaction.Id);
+
+            Assert.True(rollback.Succeeded);
+            Assert.False(File.Exists(destination));
+            Assert.Equal(RestoreTransactionStatus.RolledBack,
+                Assert.Single(await store.ListAsync()).Status);
         }
         finally
         {
@@ -698,6 +799,129 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public async Task DiagnosticsBundle_excludes_settings_and_redacts_log_secrets()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+        var log = Path.Combine(root, "errors.log");
+        var output = Path.Combine(root, "diagnostics.zip");
+        var projectRoot = Path.Combine(root, "Private Project");
+        var token = "gh" + "p_" + new string('a', 24);
+        var privateKeyHeader = "-----BEGIN " + "PRIVATE KEY-----";
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(log,
+            $"Private Project failed at {projectRoot} user=user@example.com token={token} "
+            + "Bearer abc.def.ghi https://example.test/path?access_token=unsafe\n"
+            + $"{privateKeyHeader}\nprivate-material\n-----END PRIVATE KEY-----");
+        var settings = new AppSettings
+        {
+            SetupCompleted = true,
+            ProjectRoots = [projectRoot],
+            LocalRepository = Path.Combine(root, "repository"),
+            CloudRepository = "rclone:private-account:SecretFolder",
+            CloudEnabled = true,
+            DestinationRoot = projectRoot
+        };
+
+        try
+        {
+            var service = new DiagnosticsBundleService([log]);
+            var path = await service.CreateAsync(
+                output, settings, new BackupState { LastRunSucceeded = false }, null, "test-version",
+                projects: [new ProjectEntry { Name = "Private Project", Path = projectRoot }]);
+
+            using var archive = ZipFile.OpenRead(path);
+            Assert.Contains(archive.Entries, entry => entry.FullName == "summary.json");
+            Assert.Contains(archive.Entries, entry => entry.FullName == "errors-1.log");
+            var text = string.Join("\n", archive.Entries.Select(entry =>
+            {
+                using var reader = new StreamReader(entry.Open());
+                return reader.ReadToEnd();
+            }));
+            Assert.Contains("test-version", text);
+            Assert.Contains("[REDACTED]", text);
+            Assert.DoesNotContain(projectRoot, text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Private Project", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(token, text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("private-material", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("private-account", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("SecretFolder", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("user@example.com", text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateService_selects_newest_complete_release_and_verifies_installer_hash()
+    {
+        var installerBytes = "synthetic verified installer"u8.ToArray();
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(installerBytes)).ToLowerInvariant();
+        const string version = "0.10.0-build.31.1";
+        var installerName = $"CodexBridge-{version}-setup.exe";
+        var api = JsonSerializer.Serialize(new[]
+        {
+            new
+            {
+                tag_name = "v0.11.0-build.1.1", html_url = "https://github.com/lebrit/CodexBridge/releases/tag/incomplete",
+                draft = false, assets = Array.Empty<object>()
+            },
+            new
+            {
+                tag_name = $"v{version}", html_url = $"https://github.com/lebrit/CodexBridge/releases/tag/v{version}",
+                draft = false,
+                assets = new object[]
+                {
+                    new { name = installerName, browser_download_url = $"https://github.com/lebrit/CodexBridge/releases/download/v{version}/{installerName}" },
+                    new { name = installerName + ".sha256", browser_download_url = $"https://github.com/lebrit/CodexBridge/releases/download/v{version}/{installerName}.sha256" }
+                }
+            }
+        });
+        var client = new HttpClient(new StubHttpMessageHandler(request =>
+        {
+            if (request.RequestUri!.Host == "api.github.com")
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(api) };
+            if (request.RequestUri.AbsolutePath.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase))
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent($"{hash}  {installerName}")
+                };
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(installerBytes)
+            };
+        }));
+        var service = new UpdateService(client);
+        var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var update = await service.GetLatestAsync("0.9.1-build.28.1");
+            Assert.NotNull(update);
+            Assert.Equal(version, update.Version);
+            var path = await service.DownloadVerifiedInstallerAsync(update, root);
+            Assert.Equal(installerBytes, await File.ReadAllBytesAsync(path));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("0.10.0", "0.9.9", true)]
+    [InlineData("0.9.1-build.29.1", "0.9.1-build.28.1", true)]
+    [InlineData("0.9.1", "0.9.1-build.99.1", true)]
+    [InlineData("0.9.1-build.99.1", "0.9.1", false)]
+    [InlineData("0.9.1-build.28.1", "0.9.1-build.28.1", false)]
+    [InlineData("invalid", "0.9.1", false)]
+    public void UpdateService_compares_release_versions(string candidate, string current, bool expected) =>
+        Assert.Equal(expected, UpdateService.IsNewer(candidate, current));
+
+    [Fact]
     public async Task Migration_lab_restores_real_snapshot_idempotently()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("CODEXBRIDGE_RUN_RESTIC_INTEGRATION"), "1",
@@ -879,4 +1103,11 @@ public sealed class CoreTests
         left.Identical + right.Identical,
         left.Conflicts + right.Conflicts,
         left.Skipped + right.Skipped);
+}
+
+file sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken) => Task.FromResult(responder(request));
 }

@@ -29,24 +29,7 @@ jobs:
 
       - name: Set up restic migration lab
         shell: pwsh
-        run: |
-          $restic = Get-Command restic -ErrorAction SilentlyContinue
-          if (-not $restic) {
-            winget install --exact --id restic.restic --scope User `
-              --accept-package-agreements --accept-source-agreements --disable-interactivity
-            if ($LASTEXITCODE -ne 0) { throw 'winget could not install restic.' }
-
-            $restic = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet" `
-              -Filter restic.exe -File -Recurse -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-            if (-not $restic) { throw 'restic.exe was not found after installation.' }
-            Split-Path -Parent $restic.FullName | Add-Content -LiteralPath $env:GITHUB_PATH
-            $resticPath = $restic.FullName
-          }
-          else {
-            $resticPath = $restic.Source
-          }
-          & $resticPath version
+        run: .\scripts\Install-ResticForCi.ps1
 
       - name: Compute version
         id: version
@@ -78,6 +61,50 @@ jobs:
         with:
           name: gui-build-${{ github.run_number }}
           path: artifacts/ui-smoke-*/
+          retention-days: 14
+
+  migration-source:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install restic
+        shell: pwsh
+        run: .\scripts\Install-ResticForCi.ps1
+      - name: Create encrypted synthetic snapshot
+        shell: pwsh
+        run: .\scripts\Test-CrossRunnerMigration.ps1 -Mode Create -FixtureDirectory "$env:RUNNER_TEMP\CodexBridge-cross-runner"
+      - name: Transfer encrypted repository to destination runner
+        uses: actions/upload-artifact@v7
+        with:
+          name: cross-runner-migration-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/CodexBridge-cross-runner/
+          retention-days: 1
+          if-no-files-found: error
+
+  migration-destination:
+    needs: migration-source
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install restic
+        shell: pwsh
+        run: .\scripts\Install-ResticForCi.ps1
+      - name: Receive encrypted repository from source runner
+        uses: actions/download-artifact@v8
+        with:
+          name: cross-runner-migration-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/CodexBridge-cross-runner
+      - name: Verify and restore on independent runner
+        shell: pwsh
+        run: .\scripts\Test-CrossRunnerMigration.ps1 -Mode Restore -FixtureDirectory "$env:RUNNER_TEMP\CodexBridge-cross-runner"
+      - name: Upload migration evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cross-runner-evidence-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/CodexBridge-cross-runner/migration-report.json
           retention-days: 14
 
   acceptance:
@@ -132,7 +159,7 @@ jobs:
           retention-days: 14
 
   publish:
-    needs: [build, acceptance]
+    needs: [build, acceptance, migration-destination]
     runs-on: windows-2025
     timeout-minutes: 10
     permissions:
@@ -155,7 +182,7 @@ jobs:
           $assets = @($zip, $setup) + $hashes
           $tag = "v$env:VERSION"
           $notes = @"
-          Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, public-safety validation, 30 synthetic GUI render checks, and independent Windows Server 2022/2025 install/update/uninstall acceptance jobs. Upgrade uses the published 0.9.0 installer. User data and scheduled tasks owned by other installations are preserved.
+          Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, an encrypted cross-runner restore from Windows Server 2022 to 2025, public-safety validation, 36 synthetic GUI render checks, and independent Windows Server 2022/2025 install/update/uninstall acceptance jobs. Upgrade uses the published 0.9.0 installer. User data and scheduled tasks owned by other installations are preserved.
 
           Code signing policy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md
 
