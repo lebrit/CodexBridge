@@ -79,6 +79,24 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public void Uninstall_owns_only_a_single_action_pointing_to_its_agent()
+    {
+        var executable = Path.GetTempFileName();
+        try
+        {
+            string Xml(string command, string extra = "") => new System.Xml.Linq.XElement("Task",
+                new System.Xml.Linq.XElement("Actions",
+                    new System.Xml.Linq.XElement("Exec", new System.Xml.Linq.XElement("Command", command)),
+                    string.IsNullOrEmpty(extra) ? null : System.Xml.Linq.XElement.Parse(extra))).ToString();
+            Assert.True(SchedulerService.TaskBelongsToAgent(Xml('"' + executable.ToUpperInvariant() + '"'), executable));
+            Assert.False(SchedulerService.TaskBelongsToAgent(Xml(executable + ".other"), executable));
+            Assert.False(SchedulerService.TaskBelongsToAgent(Xml(executable, "<Exec><Command>other.exe</Command></Exec>"), executable));
+            Assert.False(SchedulerService.TaskBelongsToAgent("invalid XML", executable));
+        }
+        finally { File.Delete(executable); }
+    }
+
+    [Fact]
     public void ReduceNestedRoots_keeps_only_outer_paths()
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "CodexBridge-root"));

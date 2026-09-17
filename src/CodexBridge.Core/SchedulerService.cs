@@ -33,6 +33,29 @@ public sealed class SchedulerService(ProcessRunner processes)
             : OperationResult.Fail("Не удалось отключить автоматический бэкап.", result.Combined);
     }
 
+    public async Task<OperationResult> RemoveOwnedAsync(string taskName, string agentExecutable,
+        CancellationToken cancellationToken = default)
+    {
+        var task = await processes.RunAsync("schtasks.exe", ["/Query", "/TN", taskName, "/XML"], cancellationToken: cancellationToken);
+        if (!task.Succeeded)
+            return OperationResult.Ok("Задание отсутствует или недоступно; изменений нет.");
+        if (!TaskBelongsToAgent(task.Output, agentExecutable))
+            return OperationResult.Ok("Задание другой установки сохранено.");
+        return await RemoveAsync(taskName, cancellationToken);
+    }
+
+    public static bool TaskBelongsToAgent(string taskXml, string agentExecutable)
+    {
+        try
+        {
+            var actions = XDocument.Parse(taskXml).Root?.Elements()
+                .SingleOrDefault(element => element.Name.LocalName == "Actions")?.Elements().ToArray();
+            return actions is { Length: 1 } && actions[0].Name.LocalName == "Exec"
+                && PathsEqual(actions[0].Elements().SingleOrDefault(element => element.Name.LocalName == "Command")?.Value.Trim().Trim('"') ?? "", agentExecutable);
+        }
+        catch { return false; }
+    }
+
     public async Task<ScheduledTaskStatus> GetStatusAsync(
         string taskName,
         string currentAgentExecutable,

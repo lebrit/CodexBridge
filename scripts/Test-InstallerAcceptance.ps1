@@ -6,7 +6,8 @@ param(
     [string]$CurrentSetupPath,
     [Parameter(Mandatory)]
     [string]$ExpectedVersion,
-    [string]$BaselineVersion = '0.0.0-ci-baseline'
+    [Parameter(Mandatory)]
+    [string]$BaselineVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,7 +43,8 @@ function Invoke-Setup([string]$Path, [string]$LogPath) {
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/CLOSEAPPLICATIONS',
         "/LOG=$LogPath"
     )
-    $process = Start-Process -FilePath $Path -ArgumentList $arguments -Wait -PassThru
+    $process = Start-Process -FilePath $Path -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    if (-not $process.WaitForExit(120000)) { $process.Kill($true); throw 'Installer timed out.' }
     if ($process.ExitCode -ne 0) {
         throw "Installer failed with exit code $($process.ExitCode). See $LogPath"
     }
@@ -56,7 +58,7 @@ function Assert-Installed([string]$Version) {
     }
 
     $productVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($app).ProductVersion
-    if (-not $productVersion.StartsWith($Version, [StringComparison]::OrdinalIgnoreCase)) {
+    if (($productVersion -split '\+')[0] -ne $Version) {
         throw "Unexpected installed version: $productVersion"
     }
 }
@@ -71,7 +73,7 @@ function Assert-RegisteredVersion([string]$Version) {
 }
 
 Invoke-Setup $baselineSetup $setupLog
-Assert-Installed $ExpectedVersion
+Assert-Installed $BaselineVersion
 Assert-RegisteredVersion $BaselineVersion
 if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) {
     throw 'Initial install changed pre-existing user data.'
@@ -84,10 +86,16 @@ if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) {
     throw 'The update changed user data.'
 }
 
-& (Join-Path $PSScriptRoot 'Test-ReleaseSmoke.ps1') -PublishDirectory $installDirectory
+& (Join-Path $PSScriptRoot 'Test-ReleaseSmoke.ps1') -PublishDirectory $installDirectory -ReportDirectory (Join-Path $env:RUNNER_TEMP 'CodexBridge-ui-smoke')
+
+# Reapplying the same installer must also preserve the profile.
+Invoke-Setup $currentSetup (Join-Path $env:RUNNER_TEMP 'CodexBridge-reinstall.log')
+Assert-Installed $ExpectedVersion
+Assert-RegisteredVersion $ExpectedVersion
 
 $taskName = 'CodexBridge Hourly Backup'
-& "$env:SystemRoot\System32\schtasks.exe" /Create /TN $taskName /TR 'cmd.exe /c exit 0' /SC DAILY /ST 23:59 /F /RL LIMITED | Out-Null
+$agent = Join-Path $installDirectory 'CodexBridge.Agent.exe'
+& "$env:SystemRoot\System32\schtasks.exe" /Create /TN $taskName /TR "`"$agent`" --ci-no-backup" /SC ONCE /SD 12/31/2099 /ST 23:59 /F /RL LIMITED | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not create the scheduled-task uninstall sentinel.'
 }
@@ -97,8 +105,9 @@ if (-not $uninstaller) {
     throw 'Uninstaller was not found.'
 }
 $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @(
-    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
-) -Wait -PassThru
+    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:RUNNER_TEMP\CodexBridge-uninstall.log"
+) -WindowStyle Hidden -PassThru
+if (-not $uninstall.WaitForExit(120000)) { $uninstall.Kill($true); throw 'Uninstall timed out.' }
 if ($uninstall.ExitCode -ne 0) {
     throw "Uninstaller failed with exit code $($uninstall.ExitCode)."
 }
@@ -120,6 +129,23 @@ if ($LASTEXITCODE -eq 0) {
     throw 'Uninstall left the CodexBridge scheduled task behind.'
 }
 $global:LASTEXITCODE = 0
+
+# A task with the same name belonging to another copy must survive even after upgrade.
+# This also proves the new RunOnceId entry supersedes the old installer's name-only deletion.
+Invoke-Setup $baselineSetup (Join-Path $env:RUNNER_TEMP 'CodexBridge-foreign-baseline.log')
+Invoke-Setup $currentSetup (Join-Path $env:RUNNER_TEMP 'CodexBridge-foreign-upgrade.log')
+& "$env:SystemRoot\System32\schtasks.exe" /Create /TN $taskName /TR 'cmd.exe /c exit 0' /SC ONCE /SD 12/31/2099 /ST 23:59 /F /RL LIMITED | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Could not create foreign task sentinel.' }
+$uninstall = Start-Process -FilePath (Join-Path $installDirectory 'unins000.exe') -ArgumentList @(
+    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:RUNNER_TEMP\CodexBridge-foreign-uninstall.log"
+) -WindowStyle Hidden -PassThru
+if (-not $uninstall.WaitForExit(120000)) { $uninstall.Kill($true); throw 'Second uninstall timed out.' }
+if ($uninstall.ExitCode -ne 0) { throw 'Second uninstall failed.' }
+& "$env:SystemRoot\System32\schtasks.exe" /Query /TN $taskName | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Uninstall deleted a task belonging to another application.' }
+& "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $taskName /F | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Could not clean the foreign-task test sentinel.' }
+if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) { throw 'Reinstall/uninstall changed user data.' }
 
 Write-Host "INSTALLER_ACCEPTANCE_OK=$ExpectedVersion"
 Write-Host "USER_DATA_PRESERVED=$sentinel"

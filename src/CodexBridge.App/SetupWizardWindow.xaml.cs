@@ -13,7 +13,7 @@ public partial class SetupWizardWindow : Window
     private readonly DpapiSecretStore _secrets;
     private int _step;
 
-    public SetupWizardWindow(AppSettings settings, SettingsStore settingsStore, DpapiSecretStore secrets)
+    public SetupWizardWindow(AppSettings settings, SettingsStore settingsStore, DpapiSecretStore secrets, bool previewOnly = false)
     {
         InitializeComponent();
         _settings = settings;
@@ -24,7 +24,9 @@ public partial class SetupWizardWindow : Window
         LocalRepositoryText.Text = settings.LocalRepository;
         CloudEnabledCheck.IsChecked = settings.CloudEnabled;
         CloudRepositoryText.Text = settings.CloudRepository;
-        if (!secrets.Exists)
+        if (previewOnly)
+            RecoveryKeyText.Text = "DEMO — ключ в тестовом режиме не создаётся";
+        else if (!secrets.Exists)
             GenerateKey();
     }
 
@@ -104,7 +106,7 @@ public partial class SetupWizardWindow : Window
         DialogResult = false;
     }
 
-    private void ShowStep(int step)
+    internal void ShowStep(int step)
     {
         _step = step;
         WelcomePage.Visibility = step == 0 ? Visibility.Visible : Visibility.Collapsed;

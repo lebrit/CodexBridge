@@ -54,7 +54,4 @@ Name: "{autodesktop}\CodexBridge"; Filename: "{app}\CodexBridge.App.exe"; Workin
 Filename: "{app}\CodexBridge.App.exe"; Description: "{cm:LaunchProgram,CodexBridge}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""CodexBridge Hourly Backup"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveScheduledBackup"
-
-[UninstallDelete]
-Type: files; Name: "{app}\CodexBridge-errors.log"
+Filename: "{app}\CodexBridge.Agent.exe"; Parameters: "--uninstall-scheduler"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveScheduledBackup"

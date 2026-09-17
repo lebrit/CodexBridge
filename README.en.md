@@ -47,6 +47,6 @@ winget install --id restic.restic --exact
 powershell -ExecutionPolicy Bypass -File .\scripts\Build-Release.ps1
 ```
 
-The local build always creates the ZIP and also creates the installer when Inno Setup 6 is available. The GitHub Actions release gate requires the migration lab, installer build, and a clean-runner install/update/uninstall acceptance test to pass.
+The local build always creates the ZIP and also creates the installer when Inno Setup 6 is available. The GitHub Actions release gate requires the migration lab and independent Windows Server 2022/2025 acceptance jobs: install the published 0.9.0 release, upgrade, reinstall, then uninstall while preserving user data and tasks owned by other installations. Thirty synthetic GUI render checks cover both themes, two window sizes, all six pages, and all three wizard steps. PNGs and diagnostics remain in Actions artifacts for 14 days. These checks do not replace hands-on clean Windows 11 acceptance.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [roadmap](docs/ROADMAP.md). Licensed under the [MIT License](LICENSE).

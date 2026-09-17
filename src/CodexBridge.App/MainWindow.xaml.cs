@@ -54,7 +54,7 @@ public partial class MainWindow : Window
         BackupNow
     }
 
-    public MainWindow()
+    public MainWindow(bool smokeTest = false)
     {
         InitializeComponent();
         DataContext = this;
@@ -76,6 +76,8 @@ public partial class MainWindow : Window
         VersionText.Text = "Версия " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "dev");
         Loaded += async (_, _) =>
         {
+            if (smokeTest)
+                return;
             await LoadAsync();
             _stateLastWriteUtc = GetStateLastWriteUtc();
             _stateRefreshTimer.Start();

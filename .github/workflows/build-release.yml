@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: codexbridge-release-${{ github.ref }}
@@ -15,6 +15,9 @@ concurrency:
 jobs:
   build:
     runs-on: windows-2025
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -58,26 +61,6 @@ jobs:
         shell: pwsh
         run: .\scripts\Build-Release.ps1 -Version "${{ steps.version.outputs.version }}" -RequireResticIntegration -RequireInstaller
 
-      - name: Test clean Windows install, update and uninstall
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          $baselineVersion = '0.0.0-ci-baseline'
-          $baselineDirectory = Join-Path $env:RUNNER_TEMP 'CodexBridge-baseline-installer'
-          .\scripts\Build-Installer.ps1 `
-            -Version $baselineVersion `
-            -SourceDirectory .\artifacts\publish\win-x64 `
-            -OutputDirectory $baselineDirectory `
-            -Require
-          $baseline = Join-Path $baselineDirectory "CodexBridge-$baselineVersion-setup.exe"
-          $current = (Get-ChildItem .\artifacts\CodexBridge-*-setup.exe -File -ErrorAction Stop).FullName
-          .\scripts\Test-InstallerAcceptance.ps1 `
-            -BaselineSetupPath $baseline `
-            -BaselineVersion $baselineVersion `
-            -CurrentSetupPath $current `
-            -ExpectedVersion $env:VERSION
-
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
@@ -89,11 +72,82 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      - name: Upload synthetic GUI reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gui-build-${{ github.run_number }}
+          path: artifacts/ui-smoke-*/
+          retention-days: 14
+
+  acceptance:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: CodexBridge-${{ needs.build.outputs.version }}-win-x64
+          path: artifacts
+
+      - name: Verify packages and test real previous-release upgrade
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          $baselineVersion = '0.9.0-build.26.1'
+          $baselineDirectory = Join-Path $env:RUNNER_TEMP 'CodexBridge-baseline'
+          New-Item -ItemType Directory -Path $baselineDirectory | Out-Null
+          gh release download "v$baselineVersion" --repo "$env:GITHUB_REPOSITORY" `
+            --pattern "CodexBridge-$baselineVersion-setup.exe" --dir $baselineDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the previous release.' }
+          $baseline = Join-Path $baselineDirectory "CodexBridge-$baselineVersion-setup.exe"
+          if ((Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6e297778549fbc656e18a0f07a5cccc6e152cacd1d457c2775e63d7bd6f6d398') {
+            throw 'Previous-release checksum mismatch.'
+          }
+          foreach ($file in Get-ChildItem artifacts\*.sha256) {
+            $parts = (Get-Content $file.FullName -Raw).Trim() -split '\s+', 2
+            $package = Join-Path artifacts $parts[1]
+            if ((Get-FileHash $package -Algorithm SHA256).Hash -ne $parts[0]) { throw 'Package checksum mismatch.' }
+          }
+          .\scripts\Test-InstallerAcceptance.ps1 `
+            -BaselineSetupPath $baseline -BaselineVersion $baselineVersion `
+            -CurrentSetupPath ".\artifacts\CodexBridge-$env:VERSION-setup.exe" `
+            -ExpectedVersion $env:VERSION
+
+      - name: Upload acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: acceptance-${{ matrix.os }}-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/CodexBridge-*.log
+            ${{ runner.temp }}/CodexBridge-ui-smoke/
+          retention-days: 14
+
+  publish:
+    needs: [build, acceptance]
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: CodexBridge-${{ needs.build.outputs.version }}-win-x64
+          path: artifacts
+
       - name: Publish versioned prerelease
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           $zip = (Get-ChildItem artifacts\CodexBridge-*.zip -File).FullName
           $setup = (Get-ChildItem artifacts\CodexBridge-*-setup.exe -File).FullName
@@ -101,7 +155,7 @@ jobs:
           $assets = @($zip, $setup) + $hashes
           $tag = "v$env:VERSION"
           $notes = @"
-          Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, public-safety validation, and a clean-runner install/update/uninstall acceptance test. The installer preserves the per-user CodexBridge data directory during updates and uninstall.
+          Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, public-safety validation, 30 synthetic GUI render checks, and independent Windows Server 2022/2025 install/update/uninstall acceptance jobs. Upgrade uses the published 0.9.0 installer. User data and scheduled tasks owned by other installations are preserved.
 
           Code signing policy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md
 
