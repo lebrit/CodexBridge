@@ -2,15 +2,15 @@
 
 ## Текущее состояние
 
-- Версия исходников: 0.10.0, ветка `develop`, проверенный commit `a0a2771`.
+- Версия исходников: 0.10.0, ветка `develop`, проверенный commit `3e6f69f`.
 - Локальный релизный конвейер завершён: 42/42 теста, обязательная restic-лаборатория, public-safety, 36/36 GUI-состояний, self-contained ZIP и Inno Setup.
-- Локальные пакеты: `CodexBridge-0.10.0-setup.exe` (68 471 557 байт, SHA-256 `e8a4de1af84568eaa2e15c5143b722b4b96c1e10fec52f9ba23328a5d5cd78f7`) и ZIP (94 027 292 байта, SHA-256 `13862c547d41d2dbb50fc742edc8a38a1e9062c0ba4656d3fa381b21f75e7237`). Оба файла ожидаемо `NotSigned`.
-- GitHub Actions [run 31](https://github.com/lebrit/CodexBridge/actions/runs/35216435112) завершился успешно: сборка, cross-runner migration, установка и обновление на Windows Server 2022/2025, публикация.
-- Опубликован prerelease [v0.10.0-build.31.1](https://github.com/lebrit/CodexBridge/releases/tag/v0.10.0-build.31.1). Скачанные обратно с GitHub пакеты перепроверены:
-  - setup — 68 483 379 байт, SHA-256 `c6252cf69387b7479f5708c29f6b3dd091abfa2a493b61e4d711d131b746435b`;
-  - ZIP — 94 068 511 байт, SHA-256 `e0b58698591591af60ba786208eaae3b8290a098a1a4ea5db105bca66f3b03d6`;
-  - setup и `CodexBridge.App.exe` ожидаемо `NotSigned`; из опубликованного ZIP повторно прошли 36/36 GUI-проверок.
-- Cross-runner evidence: источник `runnervmibwwn`, назначение `runnervmvmocb`, три файла совпали по SHA-256, `restic check` прочитал 100% данных, повторное восстановление прошло.
+- Локальные контрольные пакеты: setup 68 480 649 байт, SHA-256 `2b759ed0e07c43415402dbf91a2da9ca62c82042d44c766706642dbcefdf7cb5`; ZIP 90 956 358 байт, SHA-256 `ee8f11b11825f39026fb0582c642f06514f78790ee291dd9d728656dcecd4508`.
+- GitHub Actions [run 32, attempt 2](https://github.com/lebrit/CodexBridge/actions/runs/35264622180) завершился успешно: сборка, cross-runner migration, установка/обновление/удаление на Windows Server 2022 и 2025, публикация. Первый attempt был принудительно остановлен после зависания отдельного runner 2025; повтор того же commit прошёл за 57 секунд.
+- Опубликован prerelease [v0.10.0-build.32.2](https://github.com/lebrit/CodexBridge/releases/tag/v0.10.0-build.32.2):
+  - setup — 68 485 134 байта, SHA-256 `318e4e8e78a3e2817a8f80dbddadbbc47fb13435ee4ae208cfde93208d147fc2`;
+  - ZIP — 94 068 706 байт, SHA-256 `ae2ec7428b1b2b946196feedec7525636d4e41f2aeb176f83b4541be951ba9f4`;
+  - опубликованные `.sha256` совпадают со встроенными GitHub asset digests; файлы ожидаемо не заявлены как подписанные.
+- Репозиторий публичный; включены Discussions, Dependabot alerts/security updates, private vulnerability reporting, secret scanning с push protection и CodeQL default setup для C#/GitHub Actions. Первичный CodeQL-run успешен, открытых CodeQL и Dependabot alerts нет.
 - Проверка NuGet с транзитивными зависимостями не нашла известных уязвимых пакетов.
 
 ## Что добавлено в 0.10.0
@@ -22,6 +22,8 @@
 - Проверка GitHub-релизов не чаще раза в сутки. Скачивание setup, проверка опубликованного SHA-256 и запуск требуют подтверждений.
 - WPF recycling virtualization, доступные имена ключевых элементов и 36 состояний GUI, включая оба режима мастера.
 - Inno Setup, установленный только для текущего пользователя, теперь автоматически находится скриптом сборки.
+- Добавлен безопасный ручной чек-лист для текущего компьютера, чистой Windows 11 VM, облака и физического переезда; релизные примечания теперь содержат быстрый старт, ссылки на проверки, Discussions и Issues.
+- Тестовый каталог больше не содержит название реального пользовательского проекта.
 
 ## Принятые решения
 
