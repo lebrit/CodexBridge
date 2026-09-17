@@ -2,6 +2,8 @@
 
 [Русский](README.md) · English
 
+[![Build and release](https://github.com/lebrit/CodexBridge/actions/workflows/build-release.yml/badge.svg?branch=develop)](https://github.com/lebrit/CodexBridge/actions/workflows/build-release.yml)
+
 CodexBridge is an open-source Windows desktop application for encrypted backup and safe recovery of development projects and selected environment settings.
 
 ## Highlights
@@ -53,4 +55,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Build-Release.ps1
 
 The local build always creates the ZIP and also creates the installer when Inno Setup 6 is available. The GitHub Actions release gate requires both the local migration lab and a repository transfer between independent Windows Server 2022/2025 runners, plus installer acceptance jobs that install the published 0.9.0 release, upgrade, reinstall, and uninstall while preserving user data and tasks owned by other installations. Thirty-six synthetic GUI render checks cover both themes, two window sizes, all six pages, and both three-step wizard modes. PNGs and diagnostics remain in Actions artifacts for 14 days. These checks do not replace hands-on clean Windows 11 acceptance.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [roadmap](docs/ROADMAP.md). Licensed under the [MIT License](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), the [roadmap](docs/ROADMAP.md), and the safe [manual acceptance checklist](docs/MANUAL_ACCEPTANCE.md). Questions and ideas are welcome in [GitHub Discussions](https://github.com/lebrit/CodexBridge/discussions); reproducible defects belong in [GitHub Issues](https://github.com/lebrit/CodexBridge/issues). Licensed under the [MIT License](LICENSE).

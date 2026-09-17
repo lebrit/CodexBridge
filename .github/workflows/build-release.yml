@@ -182,11 +182,22 @@ jobs:
           $assets = @($zip, $setup) + $hashes
           $tag = "v$env:VERSION"
           $notes = @"
-          Automatic Windows x64 build from $env:GITHUB_SHA. Includes unit tests, the isolated restic migration lab, an encrypted cross-runner restore from Windows Server 2022 to 2025, public-safety validation, 36 synthetic GUI render checks, and independent Windows Server 2022/2025 install/update/uninstall acceptance jobs. Upgrade uses the published 0.9.0 installer. User data and scheduled tasks owned by other installations are preserved.
+          Предварительная сборка CodexBridge для Windows 11 x64 из commit $env:GITHUB_SHA.
+
+          Быстрый старт:
+          1. Скачайте CodexBridge-$env:VERSION-setup.exe и расположенный рядом файл .sha256.
+          2. Сверьте SHA-256, установите приложение и сохраните созданный ключ восстановления отдельно от компьютера.
+          3. Начните с локальной копии, выполните глубокую проверку и пробное восстановление в новую пустую папку.
+
+          Автоматически проверено: unit-тесты, изолированная restic-лаборатория, зашифрованный перенос Windows Server 2022 → 2025, public-safety, 36 состояний GUI и установка/обновление/удаление на Windows Server 2022 и 2025. Пользовательские данные и задания других установок сохраняются.
+
+          Ручная приёмка: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/docs/MANUAL_ACCEPTANCE.md
+          Вопросы и идеи: https://github.com/$env:GITHUB_REPOSITORY/discussions
+          Ошибки: https://github.com/$env:GITHUB_REPOSITORY/issues
 
           Code signing policy: https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_SHA/CODE_SIGNING_POLICY.md
 
-          This build is unsigned unless both these release notes and its Authenticode signature prove otherwise. The SignPath Foundation application was not approved because the project does not yet meet the program's public-visibility requirements.
+          Сборка не подписана, пока одновременно примечания релиза и Authenticode-подпись не доказывают обратное. Заявка SignPath Foundation не была одобрена из-за пока недостаточной публичной известности проекта.
           "@
           $published = $false
           for ($attempt = 1; $attempt -le 3 -and -not $published; $attempt++) {

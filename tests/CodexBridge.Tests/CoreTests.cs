@@ -11,15 +11,15 @@ public sealed class CoreTests
     {
         var project = new ProjectEntry
         {
-            Name = "МФЦ",
-            Path = @"C:\Projects\mfc-service",
+            Name = "Демо-проект",
+            Path = @"C:\Projects\demo-service",
             IsProtected = true,
             Status = ProjectStatus.Protected
         };
 
-        Assert.True(ProjectCatalogFilter.Matches(project, "мфц", ProjectListFilter.All));
-        Assert.True(ProjectCatalogFilter.Matches(project, "MFC-SERVICE", ProjectListFilter.Protected));
-        Assert.False(ProjectCatalogFilter.Matches(project, "МФЦ", ProjectListFilter.Excluded));
+        Assert.True(ProjectCatalogFilter.Matches(project, "демо", ProjectListFilter.All));
+        Assert.True(ProjectCatalogFilter.Matches(project, "DEMO-SERVICE", ProjectListFilter.Protected));
+        Assert.False(ProjectCatalogFilter.Matches(project, "ДЕМО-ПРОЕКТ", ProjectListFilter.Excluded));
         Assert.False(ProjectCatalogFilter.Matches(project, "другой", ProjectListFilter.All));
     }
 
