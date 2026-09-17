@@ -38,6 +38,45 @@ $sentinelValue = [Guid]::NewGuid().ToString('N')
 New-Item -ItemType Directory -Path $dataDirectory -Force | Out-Null
 Set-Content -LiteralPath $sentinel -Value $sentinelValue -Encoding utf8
 
+function Write-AcceptanceStage([string]$Name) {
+    Write-Host "INSTALLER_ACCEPTANCE_STAGE=$Name"
+}
+
+function Invoke-BoundedProcess(
+    [string]$FilePath,
+    [string[]]$Arguments,
+    [string]$Description,
+    [int]$TimeoutMilliseconds = 30000
+) {
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        $startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "$Description could not be started."
+    }
+    $standardOutput = $process.StandardOutput.ReadToEndAsync()
+    $standardError = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+        try { $process.Kill($true) } catch { }
+        throw "$Description timed out after $TimeoutMilliseconds ms."
+    }
+
+    [pscustomobject]@{
+        ExitCode = $process.ExitCode
+        Output = $standardOutput.GetAwaiter().GetResult()
+        Error = $standardError.GetAwaiter().GetResult()
+    }
+}
+
 function Invoke-Setup([string]$Path, [string]$LogPath) {
     $arguments = @(
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/CLOSEAPPLICATIONS',
@@ -84,6 +123,7 @@ function Get-RegisteredUninstaller {
     return $path
 }
 
+Write-AcceptanceStage 'baseline-install'
 Invoke-Setup $baselineSetup $setupLog
 Assert-Installed $BaselineVersion
 Assert-RegisteredVersion $BaselineVersion
@@ -91,6 +131,7 @@ if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) {
     throw 'Initial install changed pre-existing user data.'
 }
 
+Write-AcceptanceStage 'upgrade-install'
 Invoke-Setup $currentSetup $upgradeLog
 Assert-Installed $ExpectedVersion
 Assert-RegisteredVersion $ExpectedVersion
@@ -98,20 +139,27 @@ if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) {
     throw 'The update changed user data.'
 }
 
+Write-AcceptanceStage 'installed-ui-smoke'
 & (Join-Path $PSScriptRoot 'Test-ReleaseSmoke.ps1') -PublishDirectory $installDirectory -ReportDirectory (Join-Path $env:RUNNER_TEMP 'CodexBridge-ui-smoke')
 
 # Reapplying the same installer must also preserve the profile.
+Write-AcceptanceStage 'same-version-reinstall'
 Invoke-Setup $currentSetup (Join-Path $env:RUNNER_TEMP 'CodexBridge-reinstall.log')
 Assert-Installed $ExpectedVersion
 Assert-RegisteredVersion $ExpectedVersion
 
 $taskName = 'CodexBridge Hourly Backup'
 $agent = Join-Path $installDirectory 'CodexBridge.Agent.exe'
-& "$env:SystemRoot\System32\schtasks.exe" /Create /TN $taskName /TR "`"$agent`" --ci-no-backup" /SC ONCE /SD 12/31/2099 /ST 23:59 /F /RL LIMITED | Out-Null
-if ($LASTEXITCODE -ne 0) {
+Write-AcceptanceStage 'owned-task-create'
+$taskCommand = Invoke-BoundedProcess "$env:SystemRoot\System32\schtasks.exe" @(
+    '/Create', '/TN', $taskName, '/TR', "`"$agent`" --ci-no-backup",
+    '/SC', 'ONCE', '/SD', '12/31/2099', '/ST', '23:59', '/F', '/RL', 'LIMITED'
+) 'Scheduled-task creation'
+if ($taskCommand.ExitCode -ne 0) {
     throw 'Could not create the scheduled-task uninstall sentinel.'
 }
 
+Write-AcceptanceStage 'owned-install-uninstall'
 $uninstall = Start-Process -FilePath (Get-RegisteredUninstaller) -ArgumentList @(
     '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:RUNNER_TEMP\CodexBridge-uninstall.log"
 ) -WindowStyle Hidden -PassThru
@@ -132,27 +180,33 @@ if (-not (Test-Path -LiteralPath $sentinel)) {
 if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) {
     throw 'Uninstall changed the preserved user data.'
 }
-& "$env:SystemRoot\System32\schtasks.exe" /Query /TN $taskName 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
+$taskCommand = Invoke-BoundedProcess "$env:SystemRoot\System32\schtasks.exe" @('/Query', '/TN', $taskName) 'Scheduled-task query'
+if ($taskCommand.ExitCode -eq 0) {
     throw 'Uninstall left the CodexBridge scheduled task behind.'
 }
-$global:LASTEXITCODE = 0
 
 # A task with the same name belonging to another copy must survive even after upgrade.
 # This also proves the new RunOnceId entry supersedes the old installer's name-only deletion.
+Write-AcceptanceStage 'foreign-task-baseline-install'
 Invoke-Setup $baselineSetup (Join-Path $env:RUNNER_TEMP 'CodexBridge-foreign-baseline.log')
+Write-AcceptanceStage 'foreign-task-upgrade-install'
 Invoke-Setup $currentSetup (Join-Path $env:RUNNER_TEMP 'CodexBridge-foreign-upgrade.log')
-& "$env:SystemRoot\System32\schtasks.exe" /Create /TN $taskName /TR 'cmd.exe /c exit 0' /SC ONCE /SD 12/31/2099 /ST 23:59 /F /RL LIMITED | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not create foreign task sentinel.' }
+Write-AcceptanceStage 'foreign-task-create'
+$taskCommand = Invoke-BoundedProcess "$env:SystemRoot\System32\schtasks.exe" @(
+    '/Create', '/TN', $taskName, '/TR', 'cmd.exe /c exit 0',
+    '/SC', 'ONCE', '/SD', '12/31/2099', '/ST', '23:59', '/F', '/RL', 'LIMITED'
+) 'Foreign scheduled-task creation'
+if ($taskCommand.ExitCode -ne 0) { throw 'Could not create foreign task sentinel.' }
+Write-AcceptanceStage 'foreign-install-uninstall'
 $uninstall = Start-Process -FilePath (Get-RegisteredUninstaller) -ArgumentList @(
     '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:RUNNER_TEMP\CodexBridge-foreign-uninstall.log"
 ) -WindowStyle Hidden -PassThru
 if (-not $uninstall.WaitForExit(120000)) { $uninstall.Kill($true); throw 'Second uninstall timed out.' }
 if ($uninstall.ExitCode -ne 0) { throw 'Second uninstall failed.' }
-& "$env:SystemRoot\System32\schtasks.exe" /Query /TN $taskName | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Uninstall deleted a task belonging to another application.' }
-& "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $taskName /F | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Could not clean the foreign-task test sentinel.' }
+$taskCommand = Invoke-BoundedProcess "$env:SystemRoot\System32\schtasks.exe" @('/Query', '/TN', $taskName) 'Foreign scheduled-task query'
+if ($taskCommand.ExitCode -ne 0) { throw 'Uninstall deleted a task belonging to another application.' }
+$taskCommand = Invoke-BoundedProcess "$env:SystemRoot\System32\schtasks.exe" @('/Delete', '/TN', $taskName, '/F') 'Foreign scheduled-task cleanup'
+if ($taskCommand.ExitCode -ne 0) { throw 'Could not clean the foreign-task test sentinel.' }
 if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne $sentinelValue) { throw 'Reinstall/uninstall changed user data.' }
 
 Write-Host "INSTALLER_ACCEPTANCE_OK=$ExpectedVersion"
