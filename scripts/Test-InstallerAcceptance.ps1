@@ -72,6 +72,18 @@ function Assert-RegisteredVersion([string]$Version) {
     }
 }
 
+function Get-RegisteredUninstaller {
+    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F573740-5355-4FB5-996B-44A79C6A334C}_is1'
+    $entry = Get-ItemProperty -LiteralPath $uninstallKey
+    $path = [IO.Path]::GetFullPath(([string]$entry.UninstallString).Trim('"'))
+    if ([IO.Path]::GetDirectoryName($path) -ne $installDirectory -or
+        [IO.Path]::GetFileName($path) -notmatch '^unins\d+\.exe$' -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw 'Registered uninstaller does not point to this installation.'
+    }
+    return $path
+}
+
 Invoke-Setup $baselineSetup $setupLog
 Assert-Installed $BaselineVersion
 Assert-RegisteredVersion $BaselineVersion
@@ -100,11 +112,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Could not create the scheduled-task uninstall sentinel.'
 }
 
-$uninstaller = Get-ChildItem -LiteralPath $installDirectory -Filter 'unins*.exe' -File | Select-Object -First 1
-if (-not $uninstaller) {
-    throw 'Uninstaller was not found.'
-}
-$uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList @(
+$uninstall = Start-Process -FilePath (Get-RegisteredUninstaller) -ArgumentList @(
     '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:RUNNER_TEMP\CodexBridge-uninstall.log"
 ) -WindowStyle Hidden -PassThru
 if (-not $uninstall.WaitForExit(120000)) { $uninstall.Kill($true); throw 'Uninstall timed out.' }
@@ -136,7 +144,7 @@ Invoke-Setup $baselineSetup (Join-Path $env:RUNNER_TEMP 'CodexBridge-foreign-bas
 Invoke-Setup $currentSetup (Join-Path $env:RUNNER_TEMP 'CodexBridge-foreign-upgrade.log')
 & "$env:SystemRoot\System32\schtasks.exe" /Create /TN $taskName /TR 'cmd.exe /c exit 0' /SC ONCE /SD 12/31/2099 /ST 23:59 /F /RL LIMITED | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not create foreign task sentinel.' }
-$uninstall = Start-Process -FilePath (Join-Path $installDirectory 'unins000.exe') -ArgumentList @(
+$uninstall = Start-Process -FilePath (Get-RegisteredUninstaller) -ArgumentList @(
     '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:RUNNER_TEMP\CodexBridge-foreign-uninstall.log"
 ) -WindowStyle Hidden -PassThru
 if (-not $uninstall.WaitForExit(120000)) { $uninstall.Kill($true); throw 'Second uninstall timed out.' }
