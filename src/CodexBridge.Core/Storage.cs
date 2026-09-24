@@ -788,7 +788,7 @@ public sealed class ToolInventoryService(ProcessRunner processes)
         return preview;
     }
 
-    private async Task<(IReadOnlyList<string> PackageIds, bool InventoryKnown, string Warning)>
+    internal async Task<(IReadOnlyList<string> PackageIds, bool InventoryKnown, string Warning)>
         CaptureInstalledWingetPackageIdsAsync(CancellationToken cancellationToken)
     {
         AppPaths.EnsureCreated();

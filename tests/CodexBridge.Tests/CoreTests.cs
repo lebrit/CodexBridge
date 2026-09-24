@@ -486,6 +486,46 @@ public sealed class CoreTests
     }
 
     [Fact]
+    public void Recommended_apps_plan_only_includes_selected_missing_packages()
+    {
+        var plan = RecommendedAppsService.BuildPlan(
+            ["9PLM9XGG6VKS", "Git.Git", "Python.PythonInstallManager"],
+            ["git.git", "Unrelated.Package"]);
+
+        Assert.Equal(["Git.Git"], plan.Installed.Select(app => app.PackageId));
+        Assert.Equal(["9PLM9XGG6VKS", "Python.PythonInstallManager"],
+            plan.Pending.Select(app => app.PackageId));
+        Assert.Equal("msstore", plan.Pending[0].Source);
+    }
+
+    [Fact]
+    public void Recommended_apps_reject_unknown_package_ids()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            RecommendedAppsService.BuildPlan(["Attacker.Unknown"], []));
+    }
+
+    [Fact]
+    public void Recommended_apps_use_exact_allowlisted_sources_and_do_not_upgrade()
+    {
+        var chatGpt = RecommendedAppsService.Catalog.Single(app => app.PackageId == "9PLM9XGG6VKS");
+        var command = RecommendedAppsService.BuildWingetInstallArguments(chatGpt);
+
+        Assert.Equal(["install", "--id", "9PLM9XGG6VKS", "--exact", "--source", "msstore"], command[..6]);
+        Assert.Contains("--no-upgrade", command);
+        Assert.Contains("--disable-interactivity", command);
+    }
+
+    [Fact]
+    public void Recommended_apps_do_not_claim_inventory_is_known_when_export_fails()
+    {
+        var plan = RecommendedAppsService.BuildPlan(["Git.Git"], ["Git.Git"], inventoryKnown: false);
+
+        Assert.Empty(plan.Installed);
+        Assert.Single(plan.Pending);
+    }
+
+    [Fact]
     public void Portable_path_tokens_cannot_escape_allowed_roots()
     {
         var root = Path.Combine(Path.GetTempPath(), "CodexBridge-tests", Guid.NewGuid().ToString("N"));

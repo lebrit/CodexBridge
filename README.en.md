@@ -22,6 +22,7 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 - a fast new-computer diagnostic checks tools, MCP, Graphify, Codebase Memory, Ponytail, and Obsidian paths without a full disk scan or exposing secrets;
 - a dedicated new-computer wizard mode that requires an existing repository and saved recovery key, never creates a replacement key or an empty repository, and opens the verified recovery flow;
 - confirmed environment preparation installs missing Graphify, Codebase Memory, and Ponytail through their official WinGet/npm/uv/Codex commands;
+- a selectable new-computer app catalog works before backup recovery: ChatGPT, Git, Python, Node.js with npm, and optional GitHub CLI, .NET SDK, and VS Code; it previews and confirms installs from fixed WinGet/Store sources;
 - protected projects can rebuild local Graphify and Codebase Memory indexes without an automatic GitHub push;
 - Obsidian vault paths are rebound only on an unambiguous folder-name match, with the existing registry backed up first;
 - a precise WinGet recovery plan removes already-installed packages from the import and uses `--no-upgrade` as a second-run safeguard;
@@ -40,6 +41,7 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 3. For a new backup, store the generated recovery key separately. For migration, provide the existing repository and the key saved on the old computer; no replacement key is generated.
 4. Find and review projects, create a backup, and check the repository.
 5. Before recovery, run the verified dry-run. If recovery is interrupted, use the transaction journal in the Recovery page to resume a verified rollback.
+6. On a fresh Windows PC, open Programs, select the apps you need, review the plan, and confirm installation. Python Install Manager resolves the current stable Python release. Account sign-in and any optional Codex CLI/index preparation remain separate steps.
 
 Current public binaries are unsigned. The SignPath Foundation application was not approved because this new project does not yet meet the program's external visibility requirements. See [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
 

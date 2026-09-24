@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private readonly SchedulerService _scheduler;
     private readonly BackupToolInstaller _toolInstaller;
     private readonly ToolInventoryService _toolInventory;
+    private readonly RecommendedAppsService _recommendedApps;
     private readonly EnvironmentDiagnosticsService _environmentDiagnostics;
     private readonly EnvironmentAutomationService _environmentAutomation;
     private readonly DiagnosticsBundleService _diagnosticsBundle;
@@ -45,6 +46,7 @@ public partial class MainWindow : Window
     public ObservableCollection<SnapshotInfo> Snapshots { get; } = [];
     public ObservableCollection<RestoreTransaction> RestoreTransactions { get; } = [];
     public ObservableCollection<string> RecentActivities { get; } = [];
+    public ObservableCollection<RecommendedAppChoice> RecommendedAppChoices { get; } = [];
 
     private enum DashboardAction
     {
@@ -71,6 +73,9 @@ public partial class MainWindow : Window
         _scheduler = new SchedulerService(_processes);
         _toolInstaller = new BackupToolInstaller(_processes);
         _toolInventory = new ToolInventoryService(_processes);
+        _recommendedApps = new RecommendedAppsService(_processes, _toolInventory);
+        foreach (var app in RecommendedAppsService.Catalog)
+            RecommendedAppChoices.Add(new RecommendedAppChoice(app));
         _environmentDiagnostics = new EnvironmentDiagnosticsService();
         _environmentAutomation = new EnvironmentAutomationService(_processes);
         _diagnosticsBundle = new DiagnosticsBundleService();
@@ -510,6 +515,66 @@ public partial class MainWindow : Window
         {
             await SaveSettingsCoreAsync();
             await ShowResultAsync(await _toolInventory.CaptureAsync(_settings.IncludeVsCode, cancellationToken));
+        });
+    }
+
+    private string[] SelectedRecommendedAppIds() =>
+        RecommendedAppChoices.Where(choice => choice.IsSelected).Select(choice => choice.PackageId).ToArray();
+
+    private static string FormatRecommendedAppsPlan(RecommendedAppsPlan plan)
+    {
+        if (plan.Selected.Count == 0)
+            return "Ни одна программа не выбрана.";
+        if (!plan.WingetAvailable)
+            return plan.Warning;
+
+        var lines = new List<string>
+        {
+            plan.InventoryKnown
+                ? $"Уже установлено: {plan.Installed.Count}; к установке: {plan.Pending.Count}."
+                : "Список установленных программ получить не удалось. WinGet пропустит уже установленные версии (--no-upgrade).",
+            "К установке: " + (plan.Pending.Count == 0 ? "нет" : string.Join(", ", plan.Pending.Select(app => app.Name)))
+        };
+        if (plan.Selected.Any(app => app.PackageId == "Python.PythonInstallManager"))
+            lines.Add("Python: после установки менеджера будет загружена актуальная стабильная версия интерпретатора.");
+        if (!string.IsNullOrWhiteSpace(plan.Warning))
+            lines.Add(plan.Warning);
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private async void PreviewRecommendedApps_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync("Проверка выбранных программ…", async cancellationToken =>
+        {
+            var plan = await _recommendedApps.PreviewAsync(SelectedRecommendedAppIds(), cancellationToken);
+            RecommendedAppsPlanText.Text = FormatRecommendedAppsPlan(plan);
+        });
+    }
+
+    private async void InstallRecommendedApps_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = SelectedRecommendedAppIds();
+        RecommendedAppsPlan? plan = null;
+        await RunBusyAsync("Проверка выбранных программ…", async cancellationToken =>
+        {
+            plan = await _recommendedApps.PreviewAsync(selected, cancellationToken);
+            RecommendedAppsPlanText.Text = FormatRecommendedAppsPlan(plan);
+        });
+        if (plan is null || plan.Selected.Count == 0 || !plan.WingetAvailable)
+            return;
+
+        var confirmation = MessageBox.Show(this,
+            FormatRecommendedAppsPlan(plan)
+            + "\n\nУстановить выбранные программы? Загрузка идёт из WinGet/Microsoft Store; установщик может запросить права администратора. Уже установленное не обновляется.",
+            "Установка программ", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+            return;
+
+        await RunBusyAsync("Установка выбранных программ…", async cancellationToken =>
+        {
+            await ShowResultAsync(await _recommendedApps.InstallAsync(selected, cancellationToken));
+            var refreshed = await _recommendedApps.PreviewAsync(selected, cancellationToken);
+            RecommendedAppsPlanText.Text = FormatRecommendedAppsPlan(refreshed);
         });
     }
 
@@ -1294,4 +1359,12 @@ public partial class MainWindow : Window
         LogText.AppendText($"[{DateTime.Now:T}] {message}{Environment.NewLine}");
         LogText.ScrollToEnd();
     }
+}
+
+public sealed class RecommendedAppChoice(RecommendedApp app)
+{
+    public string PackageId { get; } = app.PackageId;
+    public string Name { get; } = app.Name;
+    public string Description { get; } = app.Description;
+    public bool IsSelected { get; set; } = app.SelectedByDefault;
 }

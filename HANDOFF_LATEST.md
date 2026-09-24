@@ -2,7 +2,8 @@
 
 ## Текущее состояние
 
-- Версия исходников: 0.10.0, ветка `develop`, проверенный commit `3e6f69f`.
+- Версия исходников: 0.11.0, ветка `develop`. Последний опубликованный до этой задачи релиз — 0.10.0.
+- Для 0.11.0 локально прошли 46/46 тестов, public-safety и 36/36 GUI smoke-состояний; собраны self-contained ZIP и Inno Setup. Локальный установщик: SHA-256 `d4f11eabd80a859a184002c5c53c1a9a7201e457d2c56616283e399bb090e68a`; ZIP: `3fe67d9e4bcc9b6a3c43cc2428a0a0f758ebeb92b843e64539ba709f6bb537c5`. Реальная установка стороннего ПО здесь намеренно не запускалась; нужна отдельная приёмка на чистой Windows.
 - Локальный релизный конвейер завершён: 42/42 теста, обязательная restic-лаборатория, public-safety, 36/36 GUI-состояний, self-contained ZIP и Inno Setup.
 - Локальные контрольные пакеты: setup 68 480 649 байт, SHA-256 `2b759ed0e07c43415402dbf91a2da9ca62c82042d44c766706642dbcefdf7cb5`; ZIP 90 956 358 байт, SHA-256 `ee8f11b11825f39026fb0582c642f06514f78790ee291dd9d728656dcecd4508`.
 - GitHub Actions [run 32, attempt 2](https://github.com/lebrit/CodexBridge/actions/runs/35264622180) завершился успешно: сборка, cross-runner migration, установка/обновление/удаление на Windows Server 2022 и 2025, публикация. Первый attempt был принудительно остановлен после зависания отдельного runner 2025; повтор того же commit прошёл за 57 секунд.
@@ -12,6 +13,13 @@
   - опубликованные `.sha256` совпадают со встроенными GitHub asset digests; файлы ожидаемо не заявлены как подписанные.
 - Репозиторий публичный; включены Discussions, Dependabot alerts/security updates, private vulnerability reporting, secret scanning с push protection и CodeQL default setup для C#/GitHub Actions. Первичный CodeQL-run успешен, открытых CodeQL и Dependabot alerts нет.
 - Проверка NuGet с транзитивными зависимостями не нашла известных уязвимых пакетов.
+
+## Что добавлено в 0.11.0
+
+- На странице «Программы» появился выбор из фиксированного каталога для чистой Windows до восстановления backup: ChatGPT, Git, Python, Node.js с npm и необязательные GitHub CLI, .NET SDK 10, VS Code.
+- Перед изменениями показывается план. WinGet вызывается с точным package ID и источником, без обновления уже установленного ПО; неизвестные package ID отвергаются. Python Install Manager отдельно ставит текущий стабильный runtime.
+- Настройки аккаунтов и секреты не импортируются; Codex CLI, Graphify, Codebase Memory и Ponytail остаются в отдельной подтверждаемой автоподготовке.
+- Автотесты проверяют каталог, план, allowlist источников и флаг `--no-upgrade`; GUI smoke проверяет новое окно в светлой и тёмной темах.
 
 ## Что добавлено в 0.10.0
 
