@@ -111,6 +111,7 @@ jobs:
     needs: build
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
@@ -131,9 +132,34 @@ jobs:
           $baselineVersion = '0.9.0-build.26.1'
           $baselineDirectory = Join-Path $env:RUNNER_TEMP 'CodexBridge-baseline'
           New-Item -ItemType Directory -Path $baselineDirectory | Out-Null
-          gh release download "v$baselineVersion" --repo "$env:GITHUB_REPOSITORY" `
-            --pattern "CodexBridge-$baselineVersion-setup.exe" --dir $baselineDirectory
-          if ($LASTEXITCODE -ne 0) { throw 'Could not download the previous release.' }
+          $downloaded = $false
+          for ($attempt = 1; $attempt -le 2 -and -not $downloaded; $attempt++) {
+            $start = [Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = (Get-Command gh -ErrorAction Stop).Source
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            foreach ($argument in @('release', 'download', "v$baselineVersion", '--repo', $env:GITHUB_REPOSITORY,
+              '--pattern', "CodexBridge-$baselineVersion-setup.exe", '--dir', $baselineDirectory, '--clobber')) {
+              $start.ArgumentList.Add($argument)
+            }
+            $process = [Diagnostics.Process]::new()
+            try {
+              $process.StartInfo = $start
+              if (-not $process.Start()) { throw 'Could not start previous-release download.' }
+              if (-not $process.WaitForExit(120000)) {
+                try { $process.Kill($true) } catch { }
+                $null = $process.WaitForExit(10000)
+                Write-Warning "Previous-release download attempt $attempt timed out."
+              } elseif ($process.ExitCode -eq 0) {
+                $downloaded = $true
+              } else {
+                Write-Warning "Previous-release download attempt $attempt failed with code $($process.ExitCode)."
+              }
+            } finally {
+              $process.Dispose()
+            }
+          }
+          if (-not $downloaded) { throw 'Could not download the previous release after two bounded attempts.' }
           $baseline = Join-Path $baselineDirectory "CodexBridge-$baselineVersion-setup.exe"
           if ((Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6e297778549fbc656e18a0f07a5cccc6e152cacd1d457c2775e63d7bd6f6d398') {
             throw 'Previous-release checksum mismatch.'
