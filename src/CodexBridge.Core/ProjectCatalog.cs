@@ -160,6 +160,36 @@ public sealed class ProjectDiscoveryService(CatalogStore catalog)
 
 public static class PathPolicy
 {
+    public static void EnsureNoReparsePoints(string path)
+    {
+        for (var current = Path.GetFullPath(path); current is not null; current = Path.GetDirectoryName(current))
+        {
+            try
+            {
+                if (File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
+                    throw new InvalidDataException(
+                        $"Восстановление через ссылку или перенаправленную папку запрещено: {current}. Выберите обычную папку.");
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+        }
+    }
+
+    public static string SafeDirectoryName(string? value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var safe = new string((value ?? "").Select(character => invalid.Contains(character) ? '_' : character).ToArray())
+            .Trim().TrimEnd('.', ' ');
+        if (string.IsNullOrWhiteSpace(safe))
+            return "Project";
+        var stem = safe.Split('.')[0].TrimEnd().ToUpperInvariant();
+        if (stem is "CON" or "PRN" or "AUX" or "NUL"
+            || (stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT"))
+                && "123456789¹²³".Contains(stem[3])))
+            safe = "_" + safe;
+        return safe;
+    }
+
     public static IReadOnlyList<string> ReduceNestedRoots(IEnumerable<string> paths)
     {
         var ordered = paths

@@ -17,7 +17,7 @@ public sealed class RestoreService(
         string destinationRoot,
         CancellationToken cancellationToken = default) =>
         ProcessSnapshotAsync(settings, repository, password, snapshot, destinationRoot,
-            verify: false, apply: true, cancellationToken);
+            verify: true, apply: true, cancellationToken);
 
     public Task<OperationResult> PlanRestoreAsync(
         AppSettings settings,
@@ -42,6 +42,8 @@ public sealed class RestoreService(
         if (string.IsNullOrWhiteSpace(destinationRoot))
             return OperationResult.Fail("Выберите папку восстановления.");
 
+        PathPolicy.EnsureNoReparsePoints(destinationRoot);
+
         var staging = Path.Combine(AppPaths.RestoreDirectory, Guid.NewGuid().ToString("N"));
         RestoreTransaction? transaction = null;
         try
@@ -62,6 +64,7 @@ public sealed class RestoreService(
 
             var manifest = prepared.Manifest;
             var fullDestinationRoot = Path.GetFullPath(destinationRoot);
+            PathPolicy.EnsureNoReparsePoints(fullDestinationRoot);
             if (apply)
             {
                 Directory.CreateDirectory(fullDestinationRoot);
@@ -83,7 +86,7 @@ public sealed class RestoreService(
                     continue;
                 }
 
-                var name = SafeDirectoryName(project.Name);
+                var name = PathPolicy.SafeDirectoryName(project.Name);
                 var uniqueName = name;
                 for (var index = 2; !names.Add(uniqueName); index++)
                     uniqueName = $"{name}-{index}";
@@ -103,7 +106,7 @@ public sealed class RestoreService(
                     continue;
 
                 var destination = ResolveDestinationToken(item.DestinationToken);
-                var conflicts = Path.Combine(conflictRoot, "environment", SafeDirectoryName(item.Name));
+                var conflicts = Path.Combine(conflictRoot, "environment", PathPolicy.SafeDirectoryName(item.Name));
                 var result = Directory.Exists(source)
                     ? apply
                         ? await SafeMergeService.MergeDirectoryAsync(
@@ -260,7 +263,13 @@ public sealed class RestoreService(
     {
         try
         {
-            return Directory.EnumerateFiles(root, fileName, SearchOption.AllDirectories).FirstOrDefault();
+            PathPolicy.EnsureNoReparsePoints(root);
+            return Directory.EnumerateFiles(root, fileName, new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+                IgnoreInaccessible = false
+            }).FirstOrDefault();
         }
         catch
         {
@@ -283,8 +292,14 @@ public sealed class RestoreService(
                 Path.Combine(staging, full.Replace(":", "").TrimStart('\\', '/'))
             };
 
-            return candidates.Select(Path.GetFullPath).FirstOrDefault(path =>
-                PathPolicy.IsInside(path, staging) && (Directory.Exists(path) || File.Exists(path)));
+            foreach (var path in candidates.Select(Path.GetFullPath))
+            {
+                if (!PathPolicy.IsInside(path, staging) || (!Directory.Exists(path) && !File.Exists(path)))
+                    continue;
+                PathPolicy.EnsureNoReparsePoints(path);
+                return path;
+            }
+            return null;
         }
         catch
         {
@@ -316,13 +331,6 @@ public sealed class RestoreService(
         }
 
         throw new InvalidDataException("Разрешены только пути внутри {UserProfile} и {AppData}.");
-    }
-
-    private static string SafeDirectoryName(string value)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var safe = new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
-        return string.IsNullOrWhiteSpace(safe) ? "Project" : safe;
     }
 
     private static bool IsSafeStagingPath(string path) =>
@@ -376,6 +384,10 @@ public static class SafeMergeService
         RestoreTransactionStore? transactionStore,
         CancellationToken cancellationToken)
     {
+        PathPolicy.EnsureNoReparsePoints(sourceRoot);
+        PathPolicy.EnsureNoReparsePoints(destinationRoot);
+        if (conflictRoot is not null)
+            PathPolicy.EnsureNoReparsePoints(conflictRoot);
         var result = new MergeResult(0, 0, 0, 0);
         var queue = new Queue<string>();
         queue.Enqueue(Path.GetFullPath(sourceRoot));
@@ -396,6 +408,11 @@ public static class SafeMergeService
             foreach (var file in Directory.EnumerateFiles(directory))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (File.GetAttributes(file).HasFlag(FileAttributes.ReparsePoint))
+                {
+                    result = result with { Skipped = result.Skipped + 1 };
+                    continue;
+                }
                 var relative = Path.GetRelativePath(sourceRoot, file);
                 var destination = SafeCombine(destinationRoot, relative);
                 var fileResult = conflictRoot is null
@@ -450,6 +467,7 @@ public static class SafeMergeService
         }
         else if (result.Conflicts > 0)
         {
+            PathPolicy.EnsureNoReparsePoints(conflictPath);
             if (transaction is not null)
                 await transactionStore!.RecordWriteIntentAsync(
                     transaction, RestoreMutationKind.ConflictFile, source, conflictPath, cancellationToken);
@@ -462,6 +480,8 @@ public static class SafeMergeService
 
     private static void CopyFile(string source, string target, RestoreTransaction? transaction)
     {
+        PathPolicy.EnsureNoReparsePoints(source);
+        PathPolicy.EnsureNoReparsePoints(target);
         if (transaction is null)
         {
             File.Copy(source, target, false);
@@ -469,7 +489,9 @@ public static class SafeMergeService
         }
 
         var partial = RestoreTransactionStore.GetPartialPath(target, transaction.Id);
+        PathPolicy.EnsureNoReparsePoints(partial);
         File.Copy(source, partial, false);
+        PathPolicy.EnsureNoReparsePoints(target);
         File.Move(partial, target, false);
     }
 
@@ -478,6 +500,8 @@ public static class SafeMergeService
         string destination,
         CancellationToken cancellationToken = default)
     {
+        PathPolicy.EnsureNoReparsePoints(source);
+        PathPolicy.EnsureNoReparsePoints(destination);
         if (!File.Exists(source))
             return new MergeResult(0, 0, 0, 1);
         if (!File.Exists(destination))

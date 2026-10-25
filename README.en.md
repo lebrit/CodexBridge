@@ -8,6 +8,8 @@ CodexBridge is an open-source Windows desktop application for encrypted backup a
 
 ## Highlights
 
+Version 0.11.1 hardens restore paths, concurrent settings writes, and backup outcome reporting. See the [targeted reliability review and next steps (Russian)](docs/RELIABILITY_REVIEW.md).
+
 - bounded discovery of Git and non-Git projects inside user-selected roots;
 - encrypted local restic snapshots and an optional second copy through rclone;
 - an hourly Windows Task Scheduler agent with automatic catalog refresh;

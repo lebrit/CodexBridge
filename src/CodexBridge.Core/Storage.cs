@@ -52,22 +52,47 @@ public sealed class JsonFileStore
         if (!File.Exists(path))
             return createDefault();
 
-        await using var stream = File.OpenRead(path);
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
         return await JsonSerializer.DeserializeAsync<T>(stream, Options, cancellationToken)
                ?? createDefault();
     }
 
     public async Task SaveAsync<T>(string path, T value, CancellationToken cancellationToken = default)
     {
+        path = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temporary = path + ".tmp";
-        await using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        var temporary = path + $".{Guid.NewGuid():N}.tmp";
+        try
         {
-            await JsonSerializer.SerializeAsync(stream, value, Options, cancellationToken);
-            await stream.FlushAsync(cancellationToken);
+            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                await JsonSerializer.SerializeAsync(stream, value, Options, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                stream.Flush(flushToDisk: true);
+            }
+            for (var attempt = 0; ; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    File.Move(temporary, path, true);
+                    break;
+                }
+                catch (Exception exception) when (attempt < 5
+                    && exception is IOException or UnauthorizedAccessException)
+                {
+                    // Windows can briefly deny a rename while another writer replaces the same file.
+                    await Task.Delay(25 * (1 << attempt), cancellationToken);
+                }
+            }
         }
-
-        File.Move(temporary, path, true);
+        finally
+        {
+            // Each writer owns only its temporary file, even across GUI/agent processes.
+            try { File.Delete(temporary); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 }
 

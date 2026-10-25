@@ -34,6 +34,7 @@ public sealed class RestoreTransactionStore
     {
         var id = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}"[..24];
         var fullDestination = Path.GetFullPath(destinationRoot);
+        PathPolicy.EnsureNoReparsePoints(fullDestination);
         var transaction = new RestoreTransaction
         {
             Id = id,
@@ -60,6 +61,7 @@ public sealed class RestoreTransactionStore
         CancellationToken cancellationToken = default)
     {
         var fullTarget = ValidateTarget(transaction, kind, target);
+        PathPolicy.EnsureNoReparsePoints(source);
         await using var sourceStream = File.OpenRead(source);
         var hash = Convert.ToHexString(await SHA256.HashDataAsync(sourceStream, cancellationToken));
         var entry = new RestoreJournalEntry(
@@ -119,14 +121,12 @@ public sealed class RestoreTransactionStore
 
             try
             {
-                var transaction = await files.LoadAsync<RestoreTransaction>(header, () => new(), cancellationToken);
-                if (string.IsNullOrWhiteSpace(transaction.Id))
+                var transaction = await LoadAsync(Path.GetFileName(directory), cancellationToken);
+                if (transaction is null)
                     continue;
-                transaction.JournalRoot = root;
-                transaction.RecordedFiles = await CountJournalEntriesAsync(transaction.Id, cancellationToken);
                 result.Add(transaction);
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+            catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
             {
                 ErrorLog.Write("Чтение журнала восстановления", exception.Message, header);
             }
@@ -154,9 +154,19 @@ public sealed class RestoreTransactionStore
         foreach (var entry in entries.OrderByDescending(item => item.Sequence))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var target = ValidateTarget(transaction, entry.Kind, entry.TargetPath);
-            var partial = ValidateTarget(
-                transaction, entry.Kind, GetPartialPath(target, transaction.Id));
+            string target;
+            string partial;
+            try
+            {
+                target = ValidateTarget(transaction, entry.Kind, entry.TargetPath);
+                partial = ValidateTarget(transaction, entry.Kind, GetPartialPath(target, transaction.Id));
+            }
+            catch (InvalidDataException)
+            {
+                // A replaced parent must never redirect rollback into unrelated files.
+                skipped++;
+                continue;
+            }
             if (File.Exists(partial))
                 File.Delete(partial);
             if (!File.Exists(target))
@@ -169,6 +179,7 @@ public sealed class RestoreTransactionStore
                 continue;
             }
 
+            PathPolicy.EnsureNoReparsePoints(target);
             File.Delete(target);
             removed++;
         }
@@ -180,14 +191,14 @@ public sealed class RestoreTransactionStore
             : RestoreTransactionStatus.RollbackBlocked;
         transaction.Message = skipped == 0
             ? $"Откат завершён: удалено созданных файлов {removed}."
-            : $"Откат частичный: удалено {removed}, сохранено изменённых файлов {skipped}.";
+            : $"Откат частичный: удалено {removed}, сохранено изменённых файлов или небезопасных путей {skipped}.";
         await SaveAsync(transaction, cancellationToken);
         TryDeleteEmptyConflictRoot(transaction.ConflictRoot);
 
         return skipped == 0
             ? OperationResult.Ok(transaction.Message, HeaderPath(transaction.Id))
             : OperationResult.Fail(
-                transaction.Message + " Изменённые после восстановления файлы не удалены.",
+                transaction.Message + " Изменённые файлы и пути со ссылками не удалены.",
                 HeaderPath(transaction.Id));
     }
 
@@ -265,6 +276,7 @@ public sealed class RestoreTransactionStore
             : IsAllowedDestination(full, transaction.DestinationRoot);
         if (!allowed)
             throw new InvalidDataException("Журнал восстановления содержит путь вне разрешённых каталогов.");
+        PathPolicy.EnsureNoReparsePoints(full);
         return full;
     }
 
@@ -302,6 +314,7 @@ public sealed class RestoreTransactionStore
     {
         try
         {
+            PathPolicy.EnsureNoReparsePoints(conflictRoot);
             if (Directory.Exists(conflictRoot) && !Directory.EnumerateFileSystemEntries(conflictRoot).Any())
                 Directory.Delete(conflictRoot);
         }
@@ -311,18 +324,28 @@ public sealed class RestoreTransactionStore
         }
     }
 
-    private string HeaderPath(string transactionId) =>
-        Path.Combine(TransactionDirectory(ValidateId(transactionId)), HeaderFileName);
+    private string HeaderPath(string transactionId) => TransactionFile(transactionId, HeaderFileName);
 
-    private string JournalPath(string transactionId) =>
-        Path.Combine(TransactionDirectory(ValidateId(transactionId)), JournalFileName);
+    private string JournalPath(string transactionId) => TransactionFile(transactionId, JournalFileName);
 
-    private string TransactionDirectory(string transactionId) =>
-        Path.Combine(root, ValidateId(transactionId));
+    private string TransactionFile(string transactionId, string name)
+    {
+        var path = Path.Combine(TransactionDirectory(transactionId), name);
+        PathPolicy.EnsureNoReparsePoints(path);
+        return path;
+    }
+
+    private string TransactionDirectory(string transactionId)
+    {
+        var directory = Path.Combine(root, ValidateId(transactionId));
+        PathPolicy.EnsureNoReparsePoints(directory);
+        return directory;
+    }
 
     private static string ValidateId(string value)
     {
         if (string.IsNullOrWhiteSpace(value)
+            || value != value.Trim().TrimEnd('.')
             || value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
             || value.Contains(Path.DirectorySeparatorChar)
             || value.Contains(Path.AltDirectorySeparatorChar))

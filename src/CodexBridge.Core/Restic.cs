@@ -249,6 +249,7 @@ public sealed class ResticService(
         bool verify = false,
         CancellationToken cancellationToken = default)
     {
+        PathPolicy.EnsureNoReparsePoints(target);
         Directory.CreateDirectory(target);
         var arguments = new List<string> { "restore", snapshot, "--target", target };
         if (verify)
@@ -272,6 +273,8 @@ public sealed class ResticService(
         if (!OperatingSystem.IsWindows())
             return new ProcessResult(0, "", "");
 
+        PathPolicy.EnsureNoReparsePoints(target);
+
         var takeown = Path.Combine(Environment.SystemDirectory, "takeown.exe");
         var ownership = await processes.RunAsync(
             takeown, ["/F", target, "/R", "/D", "Y", "/SKIPSL"],
@@ -281,7 +284,7 @@ public sealed class ResticService(
 
         var icacls = Path.Combine(Environment.SystemDirectory, "icacls.exe");
         var reset = await processes.RunAsync(
-            icacls, [target, "/reset", "/T", "/C", "/Q"],
+            icacls, [target, "/reset", "/T", "/C", "/L", "/Q"],
             cancellationToken: cancellationToken);
         if (!reset.Succeeded)
             return reset;
@@ -292,7 +295,7 @@ public sealed class ResticService(
             return new ProcessResult(1, "", "Не удалось определить SID текущего пользователя Windows.");
 
         var access = await processes.RunAsync(
-            icacls, [target, "/grant:r", $"*{currentUserSid}:(OI)(CI)F", "/T", "/Q"],
+            icacls, [target, "/grant:r", $"*{currentUserSid}:(OI)(CI)F", "/T", "/L", "/Q"],
             cancellationToken: cancellationToken);
         if (!access.Succeeded)
             return access;
@@ -300,8 +303,14 @@ public sealed class ResticService(
         try
         {
             foreach (var directory in Directory.EnumerateDirectories(
-                         target, "*", SearchOption.AllDirectories).Prepend(target))
+                         target, "*", new EnumerationOptions
+                         {
+                             RecurseSubdirectories = true,
+                             AttributesToSkip = FileAttributes.ReparsePoint,
+                             IgnoreInaccessible = false
+                         }).Prepend(target))
             {
+                PathPolicy.EnsureNoReparsePoints(directory);
                 var attributes = File.GetAttributes(directory);
                 if (attributes.HasFlag(FileAttributes.ReadOnly))
                     File.SetAttributes(directory, attributes & ~FileAttributes.ReadOnly);

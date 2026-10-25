@@ -28,14 +28,14 @@ public sealed class BackupCoordinator(
         using (backupLock)
         {
             var settings = await settingsStore.LoadAsync(cancellationToken);
+            var configuration = ValidateStorageSettings(settings);
+            if (!configuration.Succeeded)
+                return await FinishAsync(false, configuration.Message, runSource, cancellationToken);
             var discovery = await new ProjectDiscoveryService(catalogStore).RefreshAsync(settings, cancellationToken);
             var projects = discovery.Projects;
             var password = secrets.Load();
             if (string.IsNullOrWhiteSpace(password))
                 return await FinishAsync(false, "Сначала сохраните ключ резервной копии.", runSource, cancellationToken);
-            if (string.IsNullOrWhiteSpace(settings.LocalRepository))
-                return await FinishAsync(false, "Не настроен локальный репозиторий.", runSource, cancellationToken);
-
             var protectedProjects = projects
                 .Where(project => project.IsProtected && project.Status != ProjectStatus.Missing && Directory.Exists(project.Path))
                 .ToList();
@@ -43,7 +43,7 @@ public sealed class BackupCoordinator(
                 return await FinishAsync(false, "Не найдено защищённых проектов.", runSource, cancellationToken);
 
             var includeVsCode = settings.IncludeVsCode && ToolInventoryService.FindVsCodeExecutable() is not null;
-            await new ToolInventoryService(new ProcessRunner()).CaptureAsync(includeVsCode, cancellationToken);
+            var capture = await new ToolInventoryService(new ProcessRunner()).CaptureAsync(includeVsCode, cancellationToken);
             var environment = BackupFiles.DiscoverEnvironment(includeVsCode);
             var manifest = new BackupManifest
             {
@@ -91,9 +91,15 @@ public sealed class BackupCoordinator(
 
             var state = await stateStore.LoadAsync(cancellationToken);
             state.LastLocalBackupUtc = DateTimeOffset.UtcNow;
+            state.LastRunUtc = DateTimeOffset.UtcNow;
+            state.LastRunSource = runSource;
+            state.LastRunSucceeded = false;
+            state.LastMessage = "Локальная копия готова; оставшиеся этапы ещё не завершены.";
+            // Keep evidence of the completed local snapshot even if cloud work is cancelled or crashes.
+            await stateStore.SaveAsync(state, CancellationToken.None);
             var cloudBackedUp = false;
 
-            if (settings.CloudEnabled && !string.IsNullOrWhiteSpace(settings.CloudRepository))
+            if (settings.CloudEnabled)
             {
                 var cloud = await restic.BackupAsync(settings.ResticExecutable, settings.CloudRepository, password, sources, cancellationToken);
                 if (!cloud.Succeeded)
@@ -104,10 +110,12 @@ public sealed class BackupCoordinator(
                 }
 
                 state.LastCloudBackupUtc = DateTimeOffset.UtcNow;
+                state.LastMessage = "Локальная и облачная копии готовы; итоговая проверка ещё не завершена.";
+                await stateStore.SaveAsync(state, CancellationToken.None);
                 cloudBackedUp = true;
             }
 
-            if (settings.RetentionEnabled)
+            if (settings.RetentionEnabled && capture.Succeeded)
             {
                 var targets = new List<(string Name, string Repository)> { ("локальное", settings.LocalRepository) };
                 if (cloudBackedUp)
@@ -131,12 +139,29 @@ public sealed class BackupCoordinator(
                 }
             }
 
-            state.RecordRun(true,
-                settings.CloudEnabled ? "Локальная и облачная копии готовы." : "Локальная копия готова.",
-                runSource);
+            var completion = DescribeCompletedBackup(cloudBackedUp, capture, local.Details);
+            state.RecordRun(completion.Succeeded, completion.Message, runSource);
             await stateStore.SaveAsync(state, cancellationToken);
-            return OperationResult.Ok(state.LastMessage, local.Details);
+            return completion;
         }
+    }
+
+    public static OperationResult ValidateStorageSettings(AppSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.LocalRepository))
+            return OperationResult.Fail("Не настроен локальный репозиторий.");
+        if (settings.CloudEnabled && string.IsNullOrWhiteSpace(settings.CloudRepository))
+            return OperationResult.Fail("Облачная копия включена, но адрес не указан. Укажите адрес или отключите облачную копию.");
+        return OperationResult.Ok("Хранилища настроены.");
+    }
+
+    public static OperationResult DescribeCompletedBackup(bool cloudBackedUp, OperationResult capture, string localDetails)
+    {
+        var message = cloudBackedUp ? "Локальная и облачная копии готовы." : "Локальная копия готова.";
+        return capture.Succeeded
+            ? OperationResult.Ok(message, localDetails)
+            : OperationResult.Fail(message + " Профиль среды сохранён не полностью; требуется внимание.",
+                string.Join(Environment.NewLine, localDetails, capture.Message, capture.Details));
     }
 
     private async Task<OperationResult> FinishAsync(
